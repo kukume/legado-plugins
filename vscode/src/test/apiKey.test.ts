@@ -1,18 +1,18 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { isCookieConfigured, sanitizeCookie } from "../cookie";
+import { isConfigured, sanitizeApiKey } from "../apiKey";
 
-describe("sanitizeCookie", () => {
+describe("sanitizeApiKey", () => {
   it("trims and strips wrapping quotes", () => {
-    assert.equal(sanitizeCookie('  "qttoken=abc; deviceId=1"  '), "qttoken=abc; deviceId=1");
-    assert.equal(sanitizeCookie("'qttoken=abc'"), "qttoken=abc");
-    assert.equal(sanitizeCookie("qttoken=abc"), "qttoken=abc");
+    assert.equal(sanitizeApiKey('  "lgd_abc"  '), "lgd_abc");
+    assert.equal(sanitizeApiKey("'lgd_abc'"), "lgd_abc");
+    assert.equal(sanitizeApiKey("lgd_abc"), "lgd_abc");
   });
 
-  it("treats blank as unconfigured", () => {
-    assert.equal(isCookieConfigured(""), false);
-    assert.equal(isCookieConfigured('""'), false);
-    assert.equal(isCookieConfigured("qttoken=x"), true);
+  it("requires both address and key", () => {
+    assert.equal(isConfigured("", "lgd_x"), false);
+    assert.equal(isConfigured("http://h:8080", '""'), false);
+    assert.equal(isConfigured("http://h:8080", "lgd_x"), true);
   });
 });
 

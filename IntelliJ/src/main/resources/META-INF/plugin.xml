@@ -14,8 +14,8 @@
          Simple HTML elements (text formatting, paragraphs, and lists) can be added inside of <![CDATA[ ]]> tag.
          Guidelines: https://plugins.jetbrains.com/docs/marketplace/plugin-overview-page.html#plugin-description -->
     <description><![CDATA[
-    IDE 小说阅读插件，对接 langge 接口：书架、目录、正文阅读。<br>
-    设置中配置 API 地址与 Cookie 即可使用。<br>
+    IDE 小说阅读插件，对接阅读 Web 的开放接口：书架、目录、正文阅读、进度同步。<br>
+    设置中填写阅读 Web 的服务器地址与 API Key 即可使用。<br>
     <em>Code it, and read it.</em>
   ]]></description>
 
@@ -23,8 +23,8 @@
         <h2>V1.0.0</h2>
         <h3>特性</h3>
         <ul>
-            <li>对接大灰狼/langge 接口：书架、目录、正文、进度同步</li>
-            <li>设置页配置 API 地址与 Cookie</li>
+            <li>对接阅读 Web 开放接口：书架、目录、正文、进度同步</li>
+            <li>设置页配置服务器地址与 API Key</li>
             <li>支持书架阅读、上下章切换、正文刷新</li>
             <li>支持正文字体颜色与字号设置</li>
             <li>支持异常日志开关</li>

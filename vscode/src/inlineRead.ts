@@ -185,7 +185,7 @@ export class InlineReadController implements vscode.Disposable {
     if (!book || nextIndex < 0 || nextIndex >= this.session.chapters.length) {
       return;
     }
-    const key = `${book.bookId}:${book.source}:${nextIndex}`;
+    const key = `${book.id}:${nextIndex}`;
     if (key === this.preloadedNextKey) {
       return;
     }

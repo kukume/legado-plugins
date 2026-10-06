@@ -35,7 +35,6 @@ describe("ReadSession chapter window", () => {
   it("centers a 10-chapter window on the current index", () => {
     const s = new ReadSession();
     s.chapters = Array.from({ length: 40 }, (_, i) => ({
-      itemId: String(i),
       title: `c${i}`,
       index: i,
     }));

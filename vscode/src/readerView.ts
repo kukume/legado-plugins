@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
 import { ApiClient } from "./api";
 import { getBodyFont } from "./config";
-import { isCookieConfigured } from "./cookie";
+import { isConfigured } from "./apiKey";
 import { InlineReadController } from "./inlineRead";
 import { ReadSession } from "./session";
 import { Book, ChapterOption } from "./types";
@@ -27,8 +27,8 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider, vscode.Di
         }
         this.postState();
         this.inline.refresh();
-        if (e.affectsConfiguration("legado.cookie") || e.affectsConfiguration("legado.address")) {
-          if (!this.session.reading && isCookieConfigured(vscode.workspace.getConfiguration("legado").get<string>("cookie"))) {
+        if (e.affectsConfiguration("legado.apiKey") || e.affectsConfiguration("legado.address")) {
+          if (!this.session.reading && getConfigured()) {
             void this.refreshBookshelf();
           }
         }
@@ -53,7 +53,7 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider, vscode.Di
       void this.onMessage(msg);
     });
     this.postState();
-    if (!this.session.bookshelf.length && !this.session.reading && getCookieSet()) {
+    if (!this.session.bookshelf.length && !this.session.reading && getConfigured()) {
       void this.refreshBookshelf();
     }
   }
@@ -284,7 +284,7 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider, vscode.Di
     if (!book || nextIndex >= this.session.chapters.length) {
       return;
     }
-    const key = `${book.bookId}:${book.source}:${nextIndex}`;
+    const key = `${book.id}:${nextIndex}`;
     if (key === this.currentPreload) {
       return;
     }
@@ -327,7 +327,7 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider, vscode.Di
       bookshelf: this.session.bookshelf.map((b) => ({
         name: b.name,
         current: b.durChapterTitle || b.latestChapterTitle || "",
-        source: b.source,
+        source: b.originName,
         author: b.author,
       })),
       bookName: this.session.book?.name || "",
@@ -337,7 +337,7 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider, vscode.Di
       chapterOptions: this.chapterOptions(),
       fontColor: font.color,
       fontSize: font.size,
-      cookieSet: Boolean(getCookieSet()),
+      configured: getConfigured(),
       loading: this.session.loading,
       error: this.session.error,
       ...extra,
@@ -367,8 +367,10 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider, vscode.Di
   }
 }
 
-function getCookieSet(): boolean {
-  return isCookieConfigured(vscode.workspace.getConfiguration("legado").get<string>("cookie"));
+/** 服务器地址和 API Key 都已填写 */
+function getConfigured(): boolean {
+  const c = vscode.workspace.getConfiguration("legado");
+  return isConfigured(c.get<string>("address"), c.get<string>("apiKey"));
 }
 
 function rootMessage(err: unknown): string {

@@ -615,7 +615,7 @@ object InlineReadMode {
         val chapters = CurrentReadData.bookChapterList
         if (nextIndex < 0 || nextIndex >= chapters.size) return
 
-        val key = "${book.bookId}:${book.source}:$nextIndex"
+        val key = "${book.id}:$nextIndex"
         if (key == preloadedNextKey) return
         preloadedNextKey = key
 

@@ -15,23 +15,18 @@ import tools.jackson.module.kotlin.kotlinModule
 import java.util.concurrent.TimeUnit
 
 /**
- * 大灰狼融合书源 / langge 接口客户端。
+ * 阅读 Web 开放接口客户端（API Key 鉴权，请求头 X-API-Key）。
  *
- * 对齐「安卓阅读app-大灰狼融合」书源：
- * 书架：GET  /get_book_shelf
- * 详情：GET  /detail?book_id&source&tab&variable
- * 目录：GET  /catalog?book_id&source&tab&variable
- * 正文：POST /content  body={html,item_id,source,tab,tone_id,variable,version}
- * 进度：POST /update_book_shelf
+ * 书架：GET /openapi/v1/shelf
+ * 目录：GET /openapi/v1/books/{id}
+ * 正文：GET /openapi/v1/books/{id}/content?index=&saveProgress=false
+ * 进度：PUT /openapi/v1/books/{id}/progress  body={index, title}
  */
 object ApiUtils {
 
-    private const val DEFAULT_TAB = "小说"
-    /** 书源 ruleContent 写死的 version */
-    private const val DEFAULT_VERSION = "4.11.5.1"
-    private const val DEFAULT_TONE_ID = "4"
-    private const val DEFAULT_VARIABLE = """{"custom":""}"""
+    private const val PREFIX = "/openapi/v1"
 
+    /** 正文缓存：预加载下一章后，切章可以直接显示 */
     private val bookCache = CacheBuilder.newBuilder()
         .maximumSize(20)
         .expireAfterWrite(10, TimeUnit.MINUTES)
@@ -46,23 +41,13 @@ object ApiUtils {
     val client: OkHttpClient by lazy {
         OkHttpClient.Builder()
             .connectTimeout(30, TimeUnit.SECONDS)
-            .readTimeout(30, TimeUnit.SECONDS)
+            // 正文没有缓存时服务器要向书源请求，可能比较慢
+            .readTimeout(120, TimeUnit.SECONDS)
             .writeTimeout(30, TimeUnit.SECONDS)
             .addInterceptor { chain ->
-                val original = chain.request()
-                val builder = original.newBuilder()
-                    .header("User-Agent", DEFAULT_UA)
-                    .header("Accept", "application/json, text/plain, */*")
-                    .header("Accept-Language", "zh-CN,zh;q=0.9")
-                val cookie = settingsState.cookie.trim()
-                if (cookie.isNotEmpty()) {
-                    builder.header("Cookie", cookie)
-                }
-                val base = normalizeBaseUrl(settingsState.address)
-                if (base.isNotEmpty()) {
-                    builder.header("Origin", base)
-                    builder.header("Referer", "$base/online_search")
-                }
+                val builder = chain.request().newBuilder()
+                    .header("Accept", "application/json")
+                    .header("X-API-Key", settingsState.apiKey.trim())
                 chain.proceed(builder.build())
             }
             .build()
@@ -72,301 +57,85 @@ object ApiUtils {
         addModule(kotlinModule())
     }
 
-    private const val DEFAULT_UA =
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36"
-
-    private fun normalizeBaseUrl(address: String?): String {
-        val raw = address?.trim().orEmpty().ifBlank { "https://api.langge.cf" }
-        return raw.trimEnd('/')
-    }
-
-    private fun String.toJsonNode(): JsonNode {
-        return try {
-            objectMapper.readTree(this)
-        } catch (e: Exception) {
-            error("接口返回非 JSON: ${e.message}")
-        }
-    }
-
-    private fun baseUrl(): String = normalizeBaseUrl(settingsState.address)
+    private fun baseUrl(): String = settingsState.address.trim().trimEnd('/')
 
     private fun ensureConfigured() {
-        if (settingsState.cookie.isBlank()) {
-            error("请先在 Settings → Tools → Legado Reader 中配置 Cookie")
-        }
+        if (baseUrl().isBlank()) error("请先在 Settings → Tools → Legado Reader 中填写服务器地址")
+        if (settingsState.apiKey.isBlank()) error("请先在 Settings → Tools → Legado Reader 中填写 API Key（在阅读 Web 的“我的 → API Key”中创建）")
     }
 
-    private fun get(path: String, query: Map<String, String?> = emptyMap()): JsonNode {
-        ensureConfigured()
-        val httpUrlBuilder = (baseUrl() + path).toHttpUrl().newBuilder()
-        query.forEach { (k, v) ->
-            if (!v.isNullOrBlank()) {
-                httpUrlBuilder.addQueryParameter(k, v)
-            }
-        }
-        val request = Request.Builder().url(httpUrlBuilder.build()).get().build()
+    /** 发送请求；出错时取服务器返回的 { error } 作为提示 */
+    private fun call(request: Request): JsonNode {
         return client.newCall(request).execute().use { response ->
             val body = response.body.string()
-            if (!response.isSuccessful) {
-                error("HTTP ${response.code}: ${body.take(200)}")
+            val json = try {
+                if (body.isBlank()) null else objectMapper.readTree(body)
+            } catch (_: Exception) {
+                null
             }
-            body.toJsonNode()
+            if (!response.isSuccessful) {
+                val msg = json?.get("error")?.takeIf { !it.isNull }?.asString()
+                error(msg ?: "HTTP ${response.code}: ${body.take(200)}")
+            }
+            json ?: error("接口返回非 JSON")
         }
     }
 
-    private fun postJson(path: String, json: String): JsonNode {
+    private fun get(path: String, query: Map<String, String> = emptyMap()): JsonNode {
         ensureConfigured()
-        val request = Request.Builder()
-            .url(baseUrl() + path)
-            .post(json.toRequestBody(mediaType))
-            .build()
-        return client.newCall(request).execute().use { response ->
-            val body = response.body.string()
-            if (!response.isSuccessful) {
-                error("HTTP ${response.code}: ${body.take(200)}")
-            }
-            body.toJsonNode()
-        }
+        val url = (baseUrl() + PREFIX + path).toHttpUrl().newBuilder()
+        query.forEach { (k, v) -> url.addQueryParameter(k, v) }
+        return call(Request.Builder().url(url.build()).get().build())
     }
 
-    private fun textOf(node: JsonNode?, vararg keys: String): String {
-        if (node == null || node.isNull) return ""
-        for (key in keys) {
-            val child = node[key]
-            if (child != null && !child.isNull) {
-                val value = child.asString()
-                if (value.isNotBlank()) return value
-            }
-        }
-        return ""
+    private fun putJson(path: String, json: String): JsonNode {
+        ensureConfigured()
+        return call(Request.Builder().url(baseUrl() + PREFIX + path).put(json.toRequestBody(mediaType)).build())
     }
 
-    private fun longOf(node: JsonNode?, key: String): Long? {
-        val child = node?.get(key) ?: return null
-        if (child.isNull) return null
-        return try {
-            child.asLong()
-        } catch (_: Exception) {
-            child.asString().toLongOrNull()
-        }
-    }
-
-    private fun intOf(node: JsonNode?, key: String): Int? {
-        val child = node?.get(key) ?: return null
-        if (child.isNull) return null
-        return try {
-            child.asInt()
-        } catch (_: Exception) {
-            child.asString().toIntOrNull()
-        }
-    }
-
-    private fun parseBook(node: JsonNode): BookDTO {
-        val book = BookDTO()
-        book.shelfId = longOf(node, "id")
-        book.email = textOf(node, "email")
-        book.name = textOf(node, "book_name", "name")
-        book.bookId = textOf(node, "book_id")
-        book.catalogBookId = textOf(node, "book_id")
-        book.author = textOf(node, "author").ifBlank { "未知作者" }
-        book.coverUrl = textOf(node, "thumb_url", "coverUrl")
-        book.intro = textOf(node, "abstract", "intro")
-        book.source = textOf(node, "source")
-        book.tab = textOf(node, "tab").ifBlank { DEFAULT_TAB }
-        book.kind = textOf(node, "category", "kind")
-        book.latestChapterTime = longOf(node, "last_chapter_update_time")
-        book.latestChapterTitle = textOf(node, "last_chapter_title", "latestChapterTitle")
-        book.lastChapterItemId = textOf(node, "last_chapter_item_id")
-        book.status = textOf(node, "status")
-        book.readStatus = intOf(node, "read_status")
-        book.durChapterTitle = book.latestChapterTitle
-        book.durChapterIndex = 0
-        book.durChapterPos = 0
-        return book
-    }
-
-    private fun parseChapter(node: JsonNode, index: Int): BookChapterDTO {
-        val chapter = BookChapterDTO()
-        chapter.itemId = textOf(node, "item_id", "id", "chapter_id", "cid")
-        chapter.title = textOf(node, "title", "chapter_title", "name").ifBlank { "第${index + 1}章" }
-        chapter.index = index
-        return chapter
-    }
-
-    private fun extractContentText(payload: JsonNode): String {
-        // { content: "..." }
-        val contentNode = payload["content"]
-        if (contentNode != null && !contentNode.isNull) {
-            if (contentNode.isObject) {
-                val nested = textOf(contentNode, "content", "text", "html")
-                if (nested.isNotBlank()) return nested
-            } else {
-                val text = contentNode.asString()
-                if (text.isNotBlank()) return text
-            }
-        }
-        // { data: { content: "..." } } or { data: "..." } or { data: [...] }
-        val data = payload["data"]
-        if (data != null && !data.isNull) {
-            if (data.isObject) {
-                val text = textOf(data, "content", "text", "html")
-                if (text.isNotBlank()) return text
-                val nestedList = data["data"]
-                if (nestedList != null && nestedList.isArray && nestedList.size() > 0) {
-                    val first = nestedList[0]
-                    val firstText = textOf(first, "content", "text", "html")
-                    if (firstText.isNotBlank()) return firstText
-                }
-            } else if (data.isArray && data.size() > 0) {
-                val first = data[0]
-                if (first.isObject) {
-                    val firstText = textOf(first, "content", "text", "html")
-                    if (firstText.isNotBlank()) return firstText
-                } else {
-                    return first.asString()
-                }
-            } else if (data.isString) {
-                return data.asString()
-            }
-        }
-        val fallback = textOf(payload, "text", "html", "body")
-        return fallback
-    }
-
+    /** 正文转为纯文本：去掉图片等标签（段评气泡等），解码常见实体 */
     private fun toPlainText(content: String): String {
         if (content.isBlank()) return content
-        if (!content.contains('<')) {
-            return content
-                .replace("&nbsp;", " ")
-                .replace("&lt;", "<")
-                .replace("&gt;", ">")
-                .replace("&amp;", "&")
-                .replace("&quot;", "\"")
-        }
-        return content
+        val text = if (!content.contains('<')) content else content
             .replace(Regex("(?i)<br\\s*/?>"), "\n")
             .replace(Regex("(?i)</p\\s*>"), "\n")
             .replace(Regex("(?i)</div\\s*>"), "\n")
             .replace(Regex("(?i)<[^>]+>"), "")
+        return text
             .replace("&nbsp;", " ")
             .replace("&lt;", "<")
             .replace("&gt;", ">")
-            .replace("&amp;", "&")
             .replace("&quot;", "\"")
+            .replace("&amp;", "&")
             .replace(Regex("\n{3,}"), "\n\n")
             .trim()
     }
 
-    private fun resolveCatalogBookId(book: BookDTO): String {
-        if (!book.catalogBookId.isNullOrBlank() && book.catalogBookId != book.bookId) {
-            return book.catalogBookId
-        }
-        val bookId = book.bookId
-        val source = book.source
-        require(!bookId.isNullOrBlank()) { "缺少 book_id" }
-        require(!source.isNullOrBlank()) { "缺少 source" }
-        val tab = book.tab?.ifBlank { DEFAULT_TAB } ?: DEFAULT_TAB
+    private fun requireId(book: BookDTO): Long = book.id ?: error("缺少书本 id，请刷新书架")
 
-        val jsonNode = get(
-            "/detail",
-            mapOf(
-                "book_id" to bookId,
-                "source" to source,
-                "tab" to tab,
-                "variable" to DEFAULT_VARIABLE,
-            )
-        )
-        val code = jsonNode["code"]
-        if (code != null && !code.isNull && code.asInt() != 0) {
-            // detail 失败时退回原始 book_id
-            return bookId
-        }
-        val data = jsonNode["data"]
-        val resolved = textOf(data, "book_id").ifBlank { bookId }
-        book.catalogBookId = resolved
-        if (book.name.isNullOrBlank()) {
-            book.name = textOf(data, "book_name", "name")
-        }
-        if (book.author.isNullOrBlank()) {
-            book.author = textOf(data, "author")
-        }
-        if (book.coverUrl.isNullOrBlank()) {
-            book.coverUrl = textOf(data, "thumb_url")
-        }
-        if (book.intro.isNullOrBlank()) {
-            book.intro = textOf(data, "abstract")
-        }
-        return resolved
-    }
-
+    /** 书架（只保留文字书：听书、视频、漫画不支持） */
     @JvmStatic
     fun getBookshelf(): List<BookDTO> {
-        val jsonNode = get("/get_book_shelf")
-        val data = jsonNode["data"]
-        if (data == null || data.isNull) {
-            // 兼容 {code, msg, data}
-            val code = jsonNode["code"]
-            if (code != null && !code.isNull && code.asInt() != 0) {
-                error(textOf(jsonNode, "msg", "error", "errorMsg").ifBlank { "获取书架失败" })
-            }
-            return emptyList()
-        }
-        if (!data.isArray) {
-            error("书架数据格式错误")
-        }
-        return buildList {
-            data.forEach { node ->
-                val book = parseBook(node)
-                // read_status: 1=在书架，2=已移出；只展示在架书籍
-                val status = book.readStatus
-                if (status != null && status != 1) {
-                    return@forEach
-                }
-                // 插件仅支持小说阅读
-                val tab = book.tab.orEmpty()
-                if (tab.isNotBlank() && tab != DEFAULT_TAB) {
-                    return@forEach
-                }
-                add(book)
-            }
-        }
+        val books: List<BookDTO> = objectMapper.readValue(
+            objectMapper.writeValueAsString(get("/shelf")),
+            objectMapper.typeFactory.constructCollectionType(List::class.java, BookDTO::class.java),
+        )
+        return books.filter { it.audio != true && it.video != true && it.image != true }
     }
 
+    /** 目录（去掉卷名）；顺便用服务器上最新的阅读进度更新 book */
     @JvmStatic
     fun getChapterList(book: BookDTO): List<BookChapterDTO> {
-        val catalogBookId = resolveCatalogBookId(book)
-        val source = book.source
-        require(!source.isNullOrBlank()) { "缺少 source" }
-        val tab = book.tab?.ifBlank { DEFAULT_TAB } ?: DEFAULT_TAB
-
-        val jsonNode = get(
-            "/catalog",
-            mapOf(
-                "book_id" to catalogBookId,
-                "source" to source,
-                "tab" to tab,
-                "variable" to DEFAULT_VARIABLE,
-            )
+        val json = get("/books/${requireId(book)}")
+        json["book"]?.let { b ->
+            b["durChapterIndex"]?.takeIf { !it.isNull }?.let { book.durChapterIndex = it.asInt() }
+            b["durChapterTitle"]?.takeIf { !it.isNull }?.let { book.durChapterTitle = it.asString() }
+        }
+        val chapters: List<BookChapterDTO> = objectMapper.readValue(
+            objectMapper.writeValueAsString(json["chapters"]),
+            objectMapper.typeFactory.constructCollectionType(List::class.java, BookChapterDTO::class.java),
         )
-        val code = jsonNode["code"]
-        if (code != null && !code.isNull && code.asInt() != 0) {
-            error(textOf(jsonNode, "msg", "error").ifBlank { "获取目录失败" })
-        }
-        val data = jsonNode["data"]
-        if (data == null || !data.isArray) {
-            error("目录数据格式错误")
-        }
-        return buildList {
-            var index = 0
-            data.forEach { node ->
-                val chapter = parseChapter(node, index)
-                if (!chapter.itemId.isNullOrBlank()) {
-                    chapter.index = index
-                    add(chapter)
-                    index++
-                }
-            }
-        }
+        return chapters.filter { it.volume != true && it.index != null }
     }
 
     /** 兼容旧签名：仅 bookUrl 无法拉目录，请使用 getChapterList(BookDTO) */
@@ -375,42 +144,20 @@ object ApiUtils {
         error("请使用 getChapterList(BookDTO)，当前 bookUrl=$bookUrl")
     }
 
+    /**
+     * 正文（index 为目录列表下标）。不记录进度：预加载下一章时也会调用，进度由 [saveBookProgress] 单独保存
+     */
     @JvmStatic
     fun getBookContent(book: BookDTO, index: Int): String {
         val chapters = me.kuku.legado.dao.CurrentReadData.bookChapterList
         require(index in chapters.indices) { "章节下标越界: $index / ${chapters.size}" }
-        val chapter = chapters[index]
-        val itemId = chapter.itemId
-        require(!itemId.isNullOrBlank()) { "章节缺少 item_id" }
-        val source = book.source
-        require(!source.isNullOrBlank()) { "缺少 source" }
-        val tab = book.tab?.ifBlank { DEFAULT_TAB } ?: DEFAULT_TAB
-        val cacheKey = listOf(itemId, source, tab, DEFAULT_VERSION).joinToString("|")
+        val serverIndex = chapters[index].index ?: error("章节缺少序号")
+        val id = requireId(book)
+        val cacheKey = "$id:$serverIndex"
         bookCache.getIfPresent(cacheKey)?.let { return it }
-
-        // 与书源 ruleContent 一致：POST /content
-        val body = objectMapper.createObjectNode().apply {
-            put("html", "")
-            put("item_id", itemId)
-            put("source", source)
-            put("tab", tab)
-            put("tone_id", DEFAULT_TONE_ID)
-            put("variable", DEFAULT_VARIABLE)
-            put("version", DEFAULT_VERSION)
-        }
-        val jsonNode = postJson("/content", objectMapper.writeValueAsString(body))
-        val code = jsonNode["code"]
-        if (code != null && !code.isNull && code.asInt() != 0 && jsonNode["content"] == null) {
-            error(textOf(jsonNode, "msg", "error").ifBlank { "获取正文失败" })
-        }
-        val msg = textOf(jsonNode, "msg")
-        if (msg.isNotBlank() && extractContentText(jsonNode).isBlank()) {
-            error(msg)
-        }
-        val raw = extractContentText(jsonNode)
-        if (raw.isBlank()) {
-            error(msg.ifBlank { "正文为空" })
-        }
+        val json = get("/books/$id/content", mapOf("index" to serverIndex.toString(), "saveProgress" to "false"))
+        val raw = json["content"]?.takeIf { !it.isNull }?.asString().orEmpty()
+        if (raw.isBlank()) error("正文为空")
         val text = toPlainText(raw)
         bookCache.put(cacheKey, text)
         return text
@@ -419,61 +166,50 @@ object ApiUtils {
     /** 兼容旧签名 */
     @JvmStatic
     fun getBookContent(bookUrl: String, index: Int): String {
-        val book = me.kuku.legado.dao.CurrentReadData.book
-        return getBookContent(book, index)
+        return getBookContent(me.kuku.legado.dao.CurrentReadData.book, index)
     }
 
+    /** 保存阅读进度（index 为目录列表下标）；失败不影响阅读 */
     @JvmStatic
     fun saveBookProgress(book: BookDTO, index: Int) {
-        val shelfId = book.shelfId ?: return
+        val id = book.id ?: return
         val chapters = me.kuku.legado.dao.CurrentReadData.bookChapterList
         if (index !in chapters.indices) return
         val chapter = chapters[index]
-        val itemId = chapter.itemId ?: return
-        val title = chapter.title.orEmpty()
-
+        val serverIndex = chapter.index ?: return
         val payload = objectMapper.createObjectNode().apply {
-            put("id", shelfId)
-            put("last_chapter_item_id", itemId)
-            put("last_chapter_title", title)
-            put("last_chapter_update_time", System.currentTimeMillis() / 1000)
-            if (!book.bookId.isNullOrBlank()) put("book_id", book.bookId)
-            if (!book.source.isNullOrBlank()) put("source", book.source)
-            if (!book.tab.isNullOrBlank()) put("tab", book.tab)
-            put("read_status", 1)
+            put("index", serverIndex)
+            put("title", chapter.title.orEmpty())
         }
         try {
-            postJson("/update_book_shelf", objectMapper.writeValueAsString(payload))
-            book.lastChapterItemId = itemId
-            book.durChapterTitle = title
-            book.durChapterIndex = index
-            book.latestChapterTitle = book.latestChapterTitle ?: title
+            putJson("/books/$id/progress", objectMapper.writeValueAsString(payload))
+            book.durChapterIndex = serverIndex
+            book.durChapterTitle = chapter.title
         } catch (_: Exception) {
             // 进度同步失败不影响阅读
-            if (settingsState.enableErrorLog) {
-                // swallow, caller does not depend on result
-            }
         }
     }
 
     /** 兼容旧签名 */
     @JvmStatic
     fun saveBookProgress(bookUrl: String, index: Int) {
-        val book = me.kuku.legado.dao.CurrentReadData.book
-        saveBookProgress(book, index)
+        saveBookProgress(me.kuku.legado.dao.CurrentReadData.book, index)
     }
 
     /**
-     * 根据 last_chapter_item_id 在目录中定位章节下标
+     * 根据书的阅读进度（服务器目录序号）定位到目录列表下标：
+     * 进度停在卷名上时取它后面的第一章；找不到时按标题匹配，再不行从头开始
      */
     @JvmStatic
     fun resolveChapterIndex(book: BookDTO, chapters: List<BookChapterDTO>): Int {
-        val itemId = book.lastChapterItemId
-        if (!itemId.isNullOrBlank()) {
-            val found = chapters.indexOfFirst { it.itemId == itemId }
-            if (found >= 0) return found
+        val dur = book.durChapterIndex
+        if (dur != null && dur >= 0) {
+            val exact = chapters.indexOfFirst { it.index == dur }
+            if (exact >= 0) return exact
+            val after = chapters.indexOfFirst { (it.index ?: -1) > dur }
+            if (after >= 0) return after
         }
-        val byTitle = book.durChapterTitle ?: book.latestChapterTitle
+        val byTitle = book.durChapterTitle
         if (!byTitle.isNullOrBlank()) {
             val found = chapters.indexOfFirst { it.title == byTitle }
             if (found >= 0) return found

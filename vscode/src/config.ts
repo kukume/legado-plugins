@@ -1,13 +1,13 @@
 import * as vscode from "vscode";
-import { sanitizeCookie } from "./cookie";
+import { sanitizeApiKey } from "./apiKey";
 import { ApiConfig } from "./types";
 import { clampChunkSize, DEFAULT_CHUNK_SIZE } from "./chunk";
 
 export function getApiConfig(): ApiConfig {
   const c = vscode.workspace.getConfiguration("legado");
   return {
-    address: (c.get<string>("address") || "https://api.langge.cf").trim(),
-    cookie: sanitizeCookie(c.get<string>("cookie")),
+    address: (c.get<string>("address") || "").trim(),
+    apiKey: sanitizeApiKey(c.get<string>("apiKey")),
     enableErrorLog: Boolean(c.get<boolean>("enableErrorLog")),
   };
 }

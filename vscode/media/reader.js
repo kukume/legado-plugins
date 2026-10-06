@@ -15,7 +15,7 @@ let state = {
   chapterOptions: [],
   fontColor: "",
   fontSize: 0,
-  cookieSet: false,
+  configured: false,
   loading: false,
   error: "",
 };
@@ -152,10 +152,10 @@ function addChapterSelect() {
 
 function renderContent() {
   content.innerHTML = "";
-  if (!state.cookieSet && !state.reading) {
+  if (!state.configured && !state.reading) {
     const p = document.createElement("p");
     p.className = "hint";
-    p.textContent = "请先在设置中填写 API 地址与 Cookie，然后刷新书架。";
+    p.textContent = "请先在设置中填写阅读 Web 的服务器地址与 API Key（在阅读 Web 的“我的 → API Key”中创建），然后刷新书架。";
     const b = document.createElement("button");
     b.type = "button";
     b.className = "link-btn";

@@ -7,10 +7,10 @@ import com.intellij.openapi.components.Storage
 import com.intellij.openapi.components.service
 
 data class SettingsState(
-    /** 上游 API 地址，默认 langge */
-    var address: String = "https://api.langge.cf",
-    /** Cookie，例如 qttoken=...; deviceId=... */
-    var cookie: String = "",
+    /** 阅读 Web 服务器地址，例如 http://192.168.1.10:8080 */
+    var address: String = "",
+    /** 开放接口的 API Key（在阅读 Web 的“我的 → API Key”中创建，lgd_ 开头） */
+    var apiKey: String = "",
     var enableErrorLog: Boolean = false,
     var textBodyFontColor: String = "",
     var textBodyFont: String = "",
@@ -36,9 +36,6 @@ class SettingsService : PersistentStateComponent<SettingsState> {
 
     override fun loadState(state: SettingsState) {
         this.state = state
-        if (this.state.address.isBlank()) {
-            this.state.address = "https://api.langge.cf"
-        }
         if (this.state.inlineReadChunkSize <= 0) {
             this.state.inlineReadChunkSize = 80
         }

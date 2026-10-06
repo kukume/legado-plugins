@@ -18,7 +18,7 @@ public class SettingUI {
 
     private JSpinner textBodyFontSizeSpinner;
     private JCheckBox enableErrorLogCheckBox;
-    private JTextField cookieField;
+    private JTextField apiKeyField;
     private JTextField addressTextField;
     private JSpinner inlineReadChunkSizeSpinner;
 
@@ -53,7 +53,7 @@ public class SettingUI {
         SettingsService settingsService = SettingsService.getInstance();
         String textBodyFontColor = settingsService.getState().getTextBodyFontColor();
         int textBodyFontSize = settingsService.getState().getTextBodyFontSize();
-        String cookie = settingsService.getState().getCookie();
+        String apiKey = settingsService.getState().getApiKey();
         boolean enableErrorLog = settingsService.getState().getEnableErrorLog();
         String address = settingsService.getState().getAddress();
         int inlineChunk = settingsService.getState().getInlineReadChunkSize();
@@ -67,17 +67,8 @@ public class SettingUI {
             textBodyFontSizeSpinner.setValue(textBodyFontSize);
         }
 
-        if (StringUtil.isNotEmpty(cookie)) {
-            cookieField.setText(cookie);
-        } else {
-            cookieField.setText("");
-        }
-
-        if (StringUtil.isNotEmpty(address)) {
-            addressTextField.setText(address);
-        } else {
-            addressTextField.setText("https://api.langge.cf");
-        }
+        apiKeyField.setText(StringUtil.isNotEmpty(apiKey) ? apiKey : "");
+        addressTextField.setText(StringUtil.isNotEmpty(address) ? address : "");
 
         enableErrorLogCheckBox.setSelected(enableErrorLog);
 
@@ -94,12 +85,8 @@ public class SettingUI {
         settingsService.getState().setTextBodyFontSize(Integer.parseInt(String.valueOf(textBodyFontSizeSpinner.getValue())));
         settingsService.getState().setTextBodyFontName(textBodyFontSizeSpinner.getFont().getName());
         settingsService.getState().setEnableErrorLog(enableErrorLogCheckBox.isSelected());
-        settingsService.getState().setCookie(String.valueOf(cookieField.getText()).trim());
-        String address = addressTextField.getText();
-        if (StringUtil.isEmpty(address)) {
-            address = "https://api.langge.cf";
-        }
-        settingsService.getState().setAddress(address.trim());
+        settingsService.getState().setApiKey(String.valueOf(apiKeyField.getText()).trim());
+        settingsService.getState().setAddress(String.valueOf(addressTextField.getText()).trim());
         int inlineChunk = Integer.parseInt(String.valueOf(inlineReadChunkSizeSpinner.getValue()));
         if (inlineChunk <= 0) {
             inlineChunk = 80;

@@ -1,7 +1,7 @@
 {
   "name": "legado-reader",
   "displayName": "Legado Reader",
-  "description": "IDE 小说阅读扩展：对接 langge 接口，书架、目录、正文，以及光标后的行内阅读。",
+  "description": "IDE 小说阅读扩展：对接阅读 Web 的开放接口，书架、目录、正文、进度同步，以及光标后的行内阅读。",
   "version": "1.0.0",
   "publisher": "kuku",
   "license": "GPL-3.0-or-later",
@@ -13,7 +13,7 @@
     "vscode": "^1.85.0"
   },
   "categories": ["Other"],
-  "keywords": ["legado", "reader", "novel", "langge"],
+  "keywords": ["legado", "reader", "novel"],
   "activationEvents": [
     "onView:legado.reader",
     "onCommand:legado.toggleInlineRead",
@@ -27,13 +27,13 @@
       "properties": {
         "legado.address": {
           "type": "string",
-          "default": "https://api.langge.cf",
-          "description": "上游 API 地址"
+          "default": "",
+          "description": "阅读 Web 的服务器地址，例如 http://192.168.1.10:8080"
         },
-        "legado.cookie": {
+        "legado.apiKey": {
           "type": "string",
           "default": "",
-          "description": "Cookie，例如 qttoken=...; deviceId=..."
+          "description": "开放接口的 API Key（在阅读 Web 的“我的 → API Key”中创建，lgd_ 开头）"
         },
         "legado.enableErrorLog": {
           "type": "boolean",

@@ -922,7 +922,7 @@ public class IndexUI {
                 if (nextIndex >= CurrentReadData.getBookChapterList().size()) {
                     return;
                 }
-                String key = book.getBookId() + ":" + book.getSource() + ":" + nextIndex;
+                String key = book.getId() + ":" + nextIndex;
                 if (!Objects.equals(key, currentPreLoad)) {
                     currentPreLoad = key;
                     ApplicationManager.getApplication().executeOnPooledThread(() -> {
@@ -956,7 +956,7 @@ public class IndexUI {
                     // 保存章节列表
                     CurrentReadData.setBookChapterList(bookChapters);
 
-                    // 根据 last_chapter_item_id 定位章节
+                    // 根据服务器上的阅读进度定位章节
                     int index = ApiUtils.resolveChapterIndex(book, bookChapters);
                     CurrentReadData.setBookIndex(index);
                     book.setDurChapterIndex(index);
@@ -1010,7 +1010,7 @@ public class IndexUI {
                 current = book.getLatestChapterTitle();
             }
             bookVector.add(current);
-            bookVector.add(book.getSource());
+            bookVector.add(book.getOriginName());
             bookVector.add(book.getAuthor());
             return bookVector;
         }).forEach(IndexUI.BOOK_SHELF_TABLE_MODEL::addRow);
