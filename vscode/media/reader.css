@@ -96,7 +96,18 @@ body {
   flex: 0 0 auto;
 }
 
+.chapter-picker {
+  position: relative;
+  flex: 1 1 72px;
+  min-width: 0;
+  max-width: 140px;
+}
+
 .chapter-select {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
   font: inherit;
   font-size: 11px;
   color: var(--vscode-dropdown-foreground);
@@ -106,11 +117,62 @@ body {
   height: 22px;
   padding: 0 4px;
   cursor: pointer;
-  /* native select 会按最长 option 撑开，用 flex 压住 */
-  width: 0;
   min-width: 0;
-  flex: 1 1 72px;
-  max-width: 140px;
+}
+
+.chapter-picker-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+}
+
+.chapter-caret {
+  flex: 0 0 auto;
+  opacity: 0.7;
+  font-size: 9px;
+}
+
+.chapter-menu {
+  position: fixed;
+  z-index: 50;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 4px 0;
+  background: var(--vscode-dropdown-background);
+  color: var(--vscode-dropdown-foreground);
+  border: 1px solid var(--vscode-dropdown-border, var(--vscode-panel-border, rgba(128, 128, 128, 0.45)));
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.28);
+}
+
+.chapter-item {
+  display: block;
+  width: 100%;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  padding: 4px 8px;
+  cursor: pointer;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.chapter-item:hover {
+  background: var(--vscode-list-hoverBackground);
+}
+
+.chapter-item.active {
+  background: var(--vscode-list-activeSelectionBackground);
+  color: var(--vscode-list-activeSelectionForeground);
+}
+
+.chapter-item.more {
+  color: var(--vscode-textLink-foreground);
 }
 
 .link-btn {
@@ -184,6 +246,26 @@ h2 {
   font-size: 14px;
   font-weight: 600;
   overflow-wrap: anywhere;
+}
+
+.chapter-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.chapter-head h2 {
+  margin: 0;
+  flex: 1;
+  min-width: 0;
+}
+
+.chapter-head .link-btn {
+  flex: 0 0 auto;
+  margin-top: 2px;
+  white-space: nowrap;
 }
 
 pre.body {

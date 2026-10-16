@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 import { ApiClient } from "./api";
 import { getBodyFont } from "./config";
 import { isConfigured } from "./apiKey";
+import { ChapterPanel, ChapterPanelState } from "./chapterPanel";
 import { InlineReadController } from "./inlineRead";
 import { ReadSession } from "./session";
 import { Book, ChapterOption } from "./types";
@@ -12,6 +13,8 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider, vscode.Di
   public static readonly viewId = "legado.reader";
   private view: vscode.WebviewView | undefined;
   private currentPreload: string | undefined;
+  private contentScrollTop = 0;
+  private readonly chapterPanel: ChapterPanel;
   private readonly disposables: vscode.Disposable[] = [];
 
   constructor(
@@ -20,7 +23,15 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider, vscode.Di
     private readonly api: ApiClient,
     private readonly inline: InlineReadController
   ) {
+    this.chapterPanel = new ChapterPanel(context, (type) => {
+      if (type === "prevChapter") {
+        void this.previousChapter();
+      } else {
+        void this.nextChapter();
+      }
+    });
     this.disposables.push(
+      this.chapterPanel,
       vscode.workspace.onDidChangeConfiguration((e) => {
         if (!e.affectsConfiguration("legado")) {
           return;
@@ -52,7 +63,7 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider, vscode.Di
     webviewView.webview.onDidReceiveMessage((msg: { type: string; [k: string]: unknown }) => {
       void this.onMessage(msg);
     });
-    this.postState();
+    this.postState({ restoreScroll: this.contentScrollTop });
     if (!this.session.bookshelf.length && !this.session.reading && getConfigured()) {
       void this.refreshBookshelf();
     }
@@ -161,6 +172,16 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider, vscode.Di
     void vscode.window.showInformationMessage(`${book.name} — ${chapter.title}`);
   }
 
+  openInEditor(): void {
+    const book = this.session.book;
+    const chapter = this.session.currentChapter();
+    if (!book || !chapter) {
+      void vscode.window.showInformationMessage("尚未打开章节");
+      return;
+    }
+    this.chapterPanel.show(this.editorState());
+  }
+
   private async loadCurrentChapter(pos: number): Promise<void> {
     const book = this.session.book;
     if (!book) {
@@ -200,7 +221,7 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider, vscode.Di
   private async onMessage(msg: { type: string; [k: string]: unknown }): Promise<void> {
     switch (msg.type) {
       case "ready":
-        this.postState();
+        this.postState({ restoreScroll: this.contentScrollTop });
         break;
       case "refreshBookshelf":
         await this.refreshBookshelf();
@@ -247,6 +268,9 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider, vscode.Di
         this.postState();
         break;
       case "scroll":
+        if (Number(msg.index) === this.session.index) {
+          this.contentScrollTop = Math.max(0, Number(msg.scrollTop) || 0);
+        }
         await this.maybePreloadFromScroll(Number(msg.progress) || 0);
         break;
       case "openSettings":
@@ -254,6 +278,9 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider, vscode.Di
         break;
       case "showBookInfo":
         this.showBookInfo();
+        break;
+      case "openInEditor":
+        this.openInEditor();
         break;
       default:
         break;
@@ -317,9 +344,33 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider, vscode.Di
     return options;
   }
 
-  private postState(extra: Record<string, unknown> = {}): void {
+  private editorState(): ChapterPanelState {
     const font = getBodyFont();
     const chapter = this.session.currentChapter();
+    const total = this.session.chapters.length;
+    const index = this.session.index;
+    return {
+      bookName: this.session.book?.name || "",
+      chapterTitle: chapter?.title || "",
+      body: this.session.body,
+      index,
+      total,
+      canPrev: index > 0,
+      canNext: index >= 0 && index + 1 < total,
+      fontColor: font.color,
+      fontSize: font.size,
+      loading: this.session.loading,
+      error: this.session.error,
+    };
+  }
+
+  private postState(extra: Record<string, unknown> = {}): void {
+    if (typeof extra.scrollTo === "number") {
+      this.contentScrollTop = 0;
+    }
+    const font = getBodyFont();
+    const chapter = this.session.currentChapter();
+    this.chapterPanel.sync(this.editorState());
     void this.view?.webview.postMessage({
       type: "state",
       reading: this.session.reading,

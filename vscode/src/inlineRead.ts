@@ -7,7 +7,7 @@ import {
   plainBody,
   PRELOAD_REMAINING_CHUNKS,
 } from "./chunk";
-import { getChunkSize } from "./config";
+import { getChunkSize, getInlineReadFontSize } from "./config";
 import { ReadSession } from "./session";
 
 export class InlineReadController implements vscode.Disposable {
@@ -20,6 +20,11 @@ export class InlineReadController implements vscode.Disposable {
   private readonly status: vscode.StatusBarItem;
   private readonly disposables: vscode.Disposable[] = [];
   private lastEditor: vscode.TextEditor | undefined;
+  /** 只在这个文档里显示。切换文件后清空，等下一次鼠标左键。 */
+  private shownDocument: string | undefined;
+  /** 刚用快捷键打开时，忽略同一次点击带来的编辑器焦点抖动。 */
+  private stickShown = false;
+  private stickTimer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(
     private readonly context: vscode.ExtensionContext,
@@ -34,16 +39,26 @@ export class InlineReadController implements vscode.Disposable {
     this.disposables.push(
       this.decoration,
       this.status,
-      vscode.window.onDidChangeTextEditorSelection(() => this.refresh()),
-      vscode.window.onDidChangeActiveTextEditor(() => this.refresh())
+      vscode.window.onDidChangeTextEditorSelection((e) => this.onSelection(e)),
+      vscode.window.onDidChangeActiveTextEditor(() => this.onActiveEditorChanged()),
+      vscode.workspace.onDidChangeConfiguration((e) => {
+        if (
+          e.affectsConfiguration("legado.inlineReadFontSize") ||
+          e.affectsConfiguration("legado.inlineReadChunkSize") ||
+          e.affectsConfiguration("editor.fontSize") ||
+          e.affectsConfiguration("editor.fontFamily")
+        ) {
+          this.refresh();
+        }
+      })
     );
     this.updateStatus();
-    if (this.enabledInternal) {
-      this.refresh();
-    }
   }
 
   dispose(): void {
+    if (this.stickTimer) {
+      clearTimeout(this.stickTimer);
+    }
     this.clear();
     for (const d of this.disposables) {
       d.dispose();
@@ -57,20 +72,24 @@ export class InlineReadController implements vscode.Disposable {
   async setEnabled(value: boolean): Promise<void> {
     if (this.enabledInternal === value) {
       if (value) {
+        this.pinActive();
         this.refresh();
       }
       return;
     }
     this.enabledInternal = value;
-    await this.context.globalState.update("legado.inlineRead.enabled", value);
-    this.updateStatus();
-    await vscode.commands.executeCommand("setContext", "legado.inlineRead", value);
     if (value) {
+      this.pinActive();
       this.refresh();
     } else {
       this.pendingShowAfterLoad = false;
+      this.shownDocument = undefined;
+      this.stickShown = false;
       this.clear();
     }
+    this.updateStatus();
+    await this.context.globalState.update("legado.inlineRead.enabled", value);
+    await vscode.commands.executeCommand("setContext", "legado.inlineRead", value);
   }
 
   async toggle(): Promise<boolean> {
@@ -110,6 +129,7 @@ export class InlineReadController implements vscode.Disposable {
       void vscode.window.showInformationMessage("请先开启行内阅读");
       return;
     }
+    this.pinActive();
     const loading = await this.step(true);
     if (!loading) {
       this.refresh();
@@ -121,10 +141,81 @@ export class InlineReadController implements vscode.Disposable {
       void vscode.window.showInformationMessage("请先开启行内阅读");
       return;
     }
+    this.pinActive();
     const loading = await this.step(false);
     if (!loading) {
       this.refresh();
     }
+  }
+
+  private onActiveEditorChanged(): void {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor) {
+      if (this.stickShown) {
+        return;
+      }
+      this.shownDocument = undefined;
+      this.clear();
+      return;
+    }
+    const key = this.documentKey(editor);
+    if (key === this.shownDocument) {
+      return;
+    }
+    if (this.stickShown) {
+      this.shownDocument = key;
+      this.lastEditor = editor;
+      this.refresh();
+      return;
+    }
+    this.shownDocument = undefined;
+    this.clear();
+  }
+
+  private onSelection(e: vscode.TextEditorSelectionChangeEvent): void {
+    this.lastEditor = e.textEditor;
+    if (!this.enabledInternal) {
+      return;
+    }
+    if (e.kind === vscode.TextEditorSelectionChangeKind.Mouse) {
+      this.shownDocument = this.documentKey(e.textEditor);
+      this.refresh();
+      return;
+    }
+    if (this.shownDocument && this.documentKey(e.textEditor) === this.shownDocument) {
+      this.refresh();
+    }
+  }
+
+  private pinActive(): void {
+    const editor = vscode.window.activeTextEditor ?? this.lastEditor;
+    if (!editor) {
+      return;
+    }
+    this.lastEditor = editor;
+    this.shownDocument = this.documentKey(editor);
+    this.stickShown = true;
+    if (this.stickTimer) {
+      clearTimeout(this.stickTimer);
+    }
+    this.stickTimer = setTimeout(() => {
+      this.stickShown = false;
+    }, 300);
+  }
+
+  private documentKey(editor: vscode.TextEditor): string {
+    return editor.document.uri.toString();
+  }
+
+  private editorForShow(): vscode.TextEditor | undefined {
+    const active = vscode.window.activeTextEditor;
+    if (active && this.shownDocument === this.documentKey(active)) {
+      return active;
+    }
+    if (this.lastEditor && this.shownDocument === this.documentKey(this.lastEditor)) {
+      return this.lastEditor;
+    }
+    return active ?? this.lastEditor;
   }
 
   private chunkSize(): number {
@@ -199,8 +290,8 @@ export class InlineReadController implements vscode.Disposable {
 
   refresh(override?: string): void {
     this.updateStatus();
-    const editor = vscode.window.activeTextEditor ?? this.lastEditor;
-    if (!this.enabledInternal || !editor) {
+    const editor = this.editorForShow();
+    if (!this.enabledInternal || !editor || !this.shownDocument || this.shownDocument !== this.documentKey(editor)) {
       this.clear();
       return;
     }
@@ -219,15 +310,19 @@ export class InlineReadController implements vscode.Disposable {
       }
     }
     const range = new vscode.Range(pos, pos);
+    const fontSize = getInlineReadFontSize();
     editor.setDecorations(this.decoration, [
       {
         range,
         renderOptions: {
           after: {
-            contentText: ` ${label}`,
+            contentText: ` ${label.replace(/\s+/g, " ")}`,
             color: new vscode.ThemeColor("editorCodeLens.foreground"),
-            margin: "0 0 0 8px",
+            margin: "0 0 0 0.6em",
             fontStyle: "normal",
+            fontWeight: "normal",
+            // VS Code 装饰器没有字号字段，用 textDecoration 注入，避免再套一层背景框
+            textDecoration: inlineTextStyle(fontSize),
           },
         },
       },
@@ -252,7 +347,29 @@ export class InlineReadController implements vscode.Disposable {
       const max = maxChunkIndex(text, this.chunkSize());
       this.status.text = `$(book) 行内 ${this.chunkIndex + 1}/${max + 1}`;
     }
-    this.status.tooltip = "行内阅读：Ctrl+Alt+] 下一段，Ctrl+Alt+[ 上一段";
+    this.status.tooltip = "行内阅读：Ctrl+Alt+I 开关，左键显示；Ctrl+Alt+] 下一页，Ctrl+Alt+[ 上一页";
     this.status.show();
   }
+}
+
+/** 装饰器没有字号接口，借 textDecoration 把样式写进同一条 CSS。 */
+function inlineTextStyle(fontSize: number): string {
+  const family = (vscode.workspace.getConfiguration("editor").get<string>("fontFamily") || "")
+    .replace(/["']/g, "")
+    .trim();
+  const fontFamily = family
+    ? `font-family: ${family}, "Microsoft YaHei", sans-serif`
+    : `font-family: "Microsoft YaHei", sans-serif`;
+  return [
+    "none",
+    "white-space: nowrap",
+    "display: inline",
+    "padding: 0",
+    "border: none",
+    "background: none",
+    "vertical-align: baseline",
+    `font-size: ${fontSize}px`,
+    `line-height: ${Math.round(fontSize * 1.2)}px`,
+    fontFamily,
+  ].join("; ");
 }

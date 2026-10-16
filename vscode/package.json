@@ -58,6 +58,13 @@
           "minimum": 1,
           "maximum": 500,
           "description": "行内阅读每段字数"
+        },
+        "legado.inlineReadFontSize": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "maximum": 72,
+          "description": "行内阅读字号（px）。0 表示与编辑器字号相同"
         }
       }
     },
@@ -154,13 +161,21 @@
       },
       {
         "command": "legado.inlinePrevChunk",
-        "title": "行内上一段",
-        "category": "Legado Reader"
+        "title": "上一页",
+        "category": "Legado Reader",
+        "icon": {
+          "light": "media/icons/previousChapter.svg",
+          "dark": "media/icons/previousChapter_dark.svg"
+        }
       },
       {
         "command": "legado.inlineNextChunk",
-        "title": "行内下一段",
-        "category": "Legado Reader"
+        "title": "下一页",
+        "category": "Legado Reader",
+        "icon": {
+          "light": "media/icons/nextChapter.svg",
+          "dark": "media/icons/nextChapter_dark.svg"
+        }
       },
       {
         "command": "legado.openSettings",
@@ -173,6 +188,12 @@
         "command": "legado.inlinePrevChunk",
         "key": "ctrl+alt+[",
         "mac": "ctrl+alt+[",
+        "when": "editorTextFocus"
+      },
+      {
+        "command": "legado.toggleInlineRead",
+        "key": "ctrl+alt+i",
+        "mac": "cmd+alt+i",
         "when": "editorTextFocus"
       },
       {
@@ -198,6 +219,28 @@
           "command": "legado.refreshBookshelf",
           "when": "view == legado.reader",
           "group": "navigation@3"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "legado.previousChapter",
+          "when": "activeWebviewPanelId == 'legado.chapter'",
+          "group": "navigation@1"
+        },
+        {
+          "command": "legado.nextChapter",
+          "when": "activeWebviewPanelId == 'legado.chapter'",
+          "group": "navigation@2"
+        },
+        {
+          "command": "legado.inlinePrevChunk",
+          "when": "editorTextFocus && legado.inlineRead",
+          "group": "navigation@1"
+        },
+        {
+          "command": "legado.inlineNextChunk",
+          "when": "editorTextFocus && legado.inlineRead",
+          "group": "navigation@2"
         }
       ],
       "commandPalette": [

@@ -18,7 +18,9 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     inline,
     reader,
-    vscode.window.registerWebviewViewProvider(ReaderViewProvider.viewId, reader),
+    vscode.window.registerWebviewViewProvider(ReaderViewProvider.viewId, reader, {
+      webviewOptions: { retainContextWhenHidden: true },
+    }),
     vscode.commands.registerCommand("legado.refreshBookshelf", () => reader!.refreshBookshelf()),
     vscode.commands.registerCommand("legado.backBookshelf", () => reader!.backBookshelf()),
     vscode.commands.registerCommand("legado.previousChapter", () => reader!.previousChapter()),
@@ -28,7 +30,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("legado.toggleActionBar", () => reader!.toggleActionBars()),
     vscode.commands.registerCommand("legado.toggleInlineRead", async () => {
       const on = await inline.toggle();
-      void vscode.window.showInformationMessage(on ? "已开启行内阅读：Ctrl+Alt+] 下一段，Ctrl+Alt+[ 上一段" : "已关闭行内阅读");
+      void vscode.window.showInformationMessage(on ? "已开启行内阅读。Ctrl+Alt+] 下一页，Ctrl+Alt+[ 上一页" : "已关闭行内阅读");
     }),
     vscode.commands.registerCommand("legado.inlineNextChunk", () => inline.nextChunk()),
     vscode.commands.registerCommand("legado.inlinePrevChunk", () => inline.previousChunk()),

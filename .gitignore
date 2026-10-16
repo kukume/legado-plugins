@@ -36,7 +36,9 @@ bin/
 /.nb-gradle/
 
 ### VS Code ###
-.vscode/
+.vscode/*
+!.vscode/launch.json
+!.vscode/tasks.json
 vscode/node_modules/
 vscode/out/
 !vscode/media/**/out/
