@@ -64,6 +64,7 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider, vscode.Di
       void this.onMessage(msg);
     });
     this.postState({ restoreScroll: this.contentScrollTop });
+    void this.syncReadingContext();
     if (!this.session.bookshelf.length && !this.session.reading && getConfigured()) {
       void this.refreshBookshelf();
     }
@@ -371,6 +372,7 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider, vscode.Di
     const font = getBodyFont();
     const chapter = this.session.currentChapter();
     this.chapterPanel.sync(this.editorState());
+    void this.syncReadingContext();
     void this.view?.webview.postMessage({
       type: "state",
       reading: this.session.reading,
@@ -393,6 +395,11 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider, vscode.Di
       error: this.session.error,
       ...extra,
     });
+  }
+
+  /** 标题栏刷新：书架显示“刷新书架”，正文显示“刷新文章”。 */
+  private syncReadingContext(): Thenable<unknown> {
+    return vscode.commands.executeCommand("setContext", "legado.reading", this.session.reading);
   }
 
   private html(webview: vscode.Webview): string {

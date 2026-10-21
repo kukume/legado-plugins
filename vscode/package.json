@@ -12,6 +12,7 @@
   "engines": {
     "vscode": "^1.85.0"
   },
+  "icon": "media/icon.png",
   "categories": ["Other"],
   "keywords": ["legado", "reader", "novel"],
   "activationEvents": [
@@ -217,7 +218,12 @@
         },
         {
           "command": "legado.refreshBookshelf",
-          "when": "view == legado.reader",
+          "when": "view == legado.reader && !legado.reading",
+          "group": "navigation@3"
+        },
+        {
+          "command": "legado.refreshTextBody",
+          "when": "view == legado.reader && legado.reading",
           "group": "navigation@3"
         }
       ],

@@ -127,16 +127,11 @@ function renderToolbar() {
 
   closeChapterMenu();
   toolbar.innerHTML = "";
-  if (!state.actionBarsVisible) {
+  if (!state.actionBarsVisible || !state.reading) {
     toolbar.classList.add("hidden");
     return;
   }
   toolbar.classList.remove("hidden");
-
-  if (!state.reading) {
-    addIconBtn("refresh", "刷新书架", "refreshBookshelf");
-    return;
-  }
   addIconBtn("back", "返回书架", "back");
   addSep();
   addIconBtn("previousChapter", "上一章", "prevChapter");
@@ -146,7 +141,6 @@ function renderToolbar() {
   addChapterSelect();
   addSep();
   addIconBtn("showBookInfo", "当前阅读信息", "showBookInfo");
-  addIconBtn("refresh", "刷新文章", "refreshBody");
 }
 
 const ICONS = {
