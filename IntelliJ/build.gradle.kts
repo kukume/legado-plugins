@@ -45,7 +45,11 @@ tasks {
     }
 
     patchPluginXml {
-        sinceBuild.set("201")
+        sinceBuild.set("252")
+    }
+
+    named<org.gradle.api.tasks.bundling.Zip>("buildPlugin") {
+        archiveBaseName.set("legado-kuku")
     }
 
     signPlugin {

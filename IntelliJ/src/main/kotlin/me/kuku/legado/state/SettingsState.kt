@@ -25,7 +25,7 @@ data class SettingsState(
     name = "Settings",
     storages = [Storage("LegadoReaderSettings.xml")]
 )
-@Service(Service.Level.PROJECT)
+@Service(Service.Level.APP)
 class SettingsService : PersistentStateComponent<SettingsState> {
 
     private var state: SettingsState = SettingsState()

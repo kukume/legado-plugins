@@ -30,9 +30,22 @@ jobs:
 
       - name: Build IntelliJ plugin
         working-directory: IntelliJ
+        env:
+          CERTIFICATE_CHAIN: ${{ secrets.CERTIFICATE_CHAIN }}
+          PRIVATE_KEY: ${{ secrets.PRIVATE_KEY }}
+          PRIVATE_KEY_PASSWORD: ${{ secrets.PRIVATE_KEY_PASSWORD }}
         run: |
           chmod +x ./gradlew
           ./gradlew buildPlugin --no-daemon --stacktrace
+          if [ -n "${CERTIFICATE_CHAIN}" ] && [ -n "${PRIVATE_KEY}" ]; then
+            ./gradlew signPlugin --no-daemon --stacktrace
+            signed=$(find build/distributions -maxdepth 1 -name '*-signed.zip' -print -quit)
+            unsigned=$(find build/distributions -maxdepth 1 -name '*.zip' ! -name '*-signed.zip' -print -quit)
+            if [ -n "${signed}" ] && [ -n "${unsigned}" ]; then
+              cp "${signed}" "${unsigned}"
+              rm -f "${signed}"
+            fi
+          fi
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -48,6 +61,17 @@ jobs:
           npm test
           npm run package
 
+      - name: Publish VS Code extension
+        working-directory: vscode
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: |
+          if [ -z "${VSCE_PAT}" ]; then
+            echo "VSCE_PAT is not set, skip Marketplace publish"
+            exit 0
+          fi
+          npx --yes @vscode/vsce publish
+
       - name: Resolve artifacts
         id: artifact
         run: |
@@ -55,10 +79,17 @@ jobs:
           if [ -z "$VERSION" ]; then
             VERSION=$(grep -E '^\s*version\s*=' IntelliJ/build.gradle.kts | head -n1 | sed -E 's/.*"([^"]+)".*/\1/')
           fi
-          ZIP_PATH=$(ls -1 IntelliJ/build/distributions/*.zip | head -n1)
+          ZIP_PATH=$(find IntelliJ/build/distributions -maxdepth 1 -name '*.zip' ! -name '*-signed.zip' -print -quit)
+          if [ -z "$ZIP_PATH" ]; then
+            ZIP_PATH=$(find IntelliJ/build/distributions -maxdepth 1 -name '*.zip' -print -quit)
+          fi
           ZIP_NAME=$(basename "$ZIP_PATH")
-          VSIX_PATH=$(ls -1 vscode/*.vsix | head -n1)
-          VSIX_NAME=$(basename "$VSIX_PATH")
+          VSIX_NAME=$(node -p "require('./vscode/package.json').name + '-' + require('./vscode/package.json').version + '.vsix'")
+          VSIX_PATH="vscode/${VSIX_NAME}"
+          if [ ! -f "$VSIX_PATH" ]; then
+            echo "Missing VSIX: $VSIX_PATH" >&2
+            exit 1
+          fi
           {
             echo "version=$VERSION"
             echo "zip_path=$ZIP_PATH"
@@ -82,9 +113,9 @@ jobs:
           set -euo pipefail
 
           SHORT_SHA="${SHA:0:7}"
-          TITLE="Legado Reader ${VERSION}"
+          TITLE="Legado Kuku ${VERSION}"
           NOTES="$(cat <<EOF
-          ## Legado Reader ${VERSION}
+          ## Legado Kuku ${VERSION}
 
           - Commit: \`${SHORT_SHA}\`
           - IntelliJ: \`${ZIP_NAME}\`

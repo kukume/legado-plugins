@@ -60,8 +60,8 @@ object ApiUtils {
     private fun baseUrl(): String = settingsState.address.trim().trimEnd('/')
 
     private fun ensureConfigured() {
-        if (baseUrl().isBlank()) error("请先在 Settings → Tools → Legado Reader 中填写服务器地址")
-        if (settingsState.apiKey.isBlank()) error("请先在 Settings → Tools → Legado Reader 中填写 API Key（在阅读 Web 的“我的 → API Key”中创建）")
+        if (baseUrl().isBlank()) error("请先在 Settings → Tools → Legado Kuku 中填写服务器地址")
+        if (settingsState.apiKey.isBlank()) error("请先在 Settings → Tools → Legado Kuku 中填写 API Key（在阅读 Web 的“我的 → API Key”中创建）")
     }
 
     /** 发送请求；出错时取服务器返回的 { error } 作为提示 */
