@@ -1,4 +1,4 @@
-# Legado Kuku
+# Legado
 
 IDE 小说阅读插件，对接 [阅读 Web](https://github.com/kukume/legado-web) 的开放接口：书架、目录、正文、进度同步。IntelliJ 插件兼容 2025.2 及以上。
 
@@ -15,9 +15,9 @@ IDE 小说阅读插件，对接 [阅读 Web](https://github.com/kukume/legado-we
 
 ## VS Code 扩展
 
-1. 在扩展市场搜索 **Legado Kuku**。也可以从 [Releases](https://github.com/kukume/legado-plugins/releases/latest) 下载 `legado-kuku-*.vsix`（或在 `vscode/` 下执行 `npm install && npm run package`），再用 **Install from VSIX…** 安装。
-2. 打开设置搜索 `Legado Kuku`，填入阅读 Web 的 **服务器地址**（如 `http://192.168.1.10:8080`）与 **API Key**。
-3. 活动栏打开 Legado Kuku 侧栏，刷新书架后即可阅读。
+1. 在扩展市场搜索 **Legado**。也可以从 [Releases](https://github.com/kukume/legado-plugins/releases/latest) 下载 `legado-*.vsix`（或在 `vscode/` 下执行 `npm install && npm run package`），再用 **Install from VSIX…** 安装。
+2. 打开设置搜索 `Legado`，填入阅读 Web 的 **服务器地址**（如 `http://192.168.1.10:8080`）与 **API Key**。
+3. 活动栏打开 Legado 侧栏，刷新书架后即可阅读。
 
 行内阅读开启后，正文会显示在光标后面。上下翻段快捷键：
 

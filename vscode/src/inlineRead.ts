@@ -229,7 +229,7 @@ export class InlineReadController implements vscode.Disposable {
     }
     const text = plainBody(this.session.body);
     if (!text) {
-      this.refresh("暂无正文，请先在 Legado Kuku 打开一章");
+      this.refresh("暂无正文，请先在 Legado 打开一章");
       return false;
     }
     const max = maxChunkIndex(text, this.chunkSize());
@@ -301,7 +301,7 @@ export class InlineReadController implements vscode.Disposable {
     if (!label) {
       const text = plainBody(this.session.body);
       if (!text) {
-        label = "暂无正文，请先在 Legado Kuku 打开一章";
+        label = "暂无正文，请先在 Legado 打开一章";
       } else if (this.pendingShowAfterLoad) {
         label = "加载中…";
       } else {

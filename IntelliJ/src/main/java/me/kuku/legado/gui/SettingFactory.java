@@ -16,7 +16,7 @@ import java.awt.*;
 
 public class SettingFactory implements SearchableConfigurable {
 
-    private final static String DISPLAY_NAME = "Legado Kuku";
+    private final static String DISPLAY_NAME = "Legado";
 
     private final static SettingUI SETTING_UI = new SettingUI();
 

@@ -262,7 +262,7 @@ object InlineReadMode {
             return
         }
         if (plainBody().isBlank()) {
-            showInlay(editor, "暂无正文，请先在 Legado Kuku 打开一章", place)
+            showInlay(editor, "暂无正文，请先在 Legado 打开一章", place)
             return
         }
 
@@ -282,7 +282,7 @@ object InlineReadMode {
             return
         }
         if (plainBody().isBlank()) {
-            showInlay(editor, "暂无正文，请先在 Legado Kuku 打开一章", place)
+            showInlay(editor, "暂无正文，请先在 Legado 打开一章", place)
             return
         }
         // 左键换行时同步 caret，方便继续编辑；显示仍按 place

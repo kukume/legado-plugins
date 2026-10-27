@@ -1,11 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <plugins>
-    <plugin id="me.kuku.legado" url="https://github.com/kukume/legado-plugins/releases/download/latest/legado-kuku-1.0.0.zip" version="1.0.0">
-        <name>Legado Kuku</name>
+    <plugin id="me.kuku.legado" url="https://github.com/kukume/legado-plugins/releases/download/latest/legado-1.0.0.zip" version="1.0.0">
+            <name>Legado</name>
 
         <description><![CDATA[
             Read novels from your Legado Web server in the IDE, including the bookshelf, chapters, and reading progress.<br>
-            在 Settings → Tools → Legado Kuku 中填写阅读 Web 的服务器地址和 API Key（我的 → API Key，<code>lgd_</code> 开头）。只支持文字书。<br>
+            在 Settings → Tools → Legado 中填写阅读 Web 的服务器地址和 API Key（我的 → API Key，<code>lgd_</code> 开头）。只支持文字书。<br>
             <em>Code it, and read it.</em>
      ]]></description>
 

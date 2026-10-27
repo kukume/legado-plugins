@@ -1,6 +1,6 @@
 {
-  "name": "legado-kuku",
-  "displayName": "Legado Kuku",
+  "name": "legado",
+  "displayName": "Legado",
   "description": "IDE 小说阅读扩展：对接阅读 Web 的开放接口，书架、目录、正文、进度同步，以及光标后的行内阅读。",
   "version": "1.0.0",
   "publisher": "kukume",
@@ -13,18 +13,18 @@
     "vscode": "^1.85.0"
   },
   "icon": "media/icon.png",
-  "categories": ["Other"],
-  "keywords": ["legado", "reader", "novel"],
-  "activationEvents": [
-    "onView:legado.reader",
-    "onCommand:legado.toggleInlineRead",
-    "onCommand:legado.inlineNextChunk",
-    "onCommand:legado.inlinePrevChunk"
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "legado",
+    "reader",
+    "novel"
   ],
   "main": "./out/extension.js",
   "contributes": {
     "configuration": {
-      "title": "Legado Kuku",
+      "title": "Legado",
       "properties": {
         "legado.address": {
           "type": "string",
@@ -73,7 +73,7 @@
       "activitybar": [
         {
           "id": "legado",
-          "title": "Legado Kuku",
+          "title": "Legado",
           "icon": "media/icon.svg"
         }
       ]
@@ -83,7 +83,8 @@
         {
           "type": "webview",
           "id": "legado.reader",
-          "name": "Legado Kuku"
+          "name": "Legado",
+          "icon": "media/icon.svg"
         }
       ]
     },
@@ -91,7 +92,7 @@
       {
         "command": "legado.refreshBookshelf",
         "title": "刷新书架",
-        "category": "Legado Kuku",
+        "category": "Legado",
         "icon": {
           "light": "media/icons/refresh.svg",
           "dark": "media/icons/refresh_dark.svg"
@@ -100,7 +101,7 @@
       {
         "command": "legado.backBookshelf",
         "title": "返回书架",
-        "category": "Legado Kuku",
+        "category": "Legado",
         "icon": {
           "light": "media/icons/back.svg",
           "dark": "media/icons/back_dark.svg"
@@ -109,7 +110,7 @@
       {
         "command": "legado.previousChapter",
         "title": "上一章",
-        "category": "Legado Kuku",
+        "category": "Legado",
         "icon": {
           "light": "media/icons/previousChapter.svg",
           "dark": "media/icons/previousChapter_dark.svg"
@@ -118,7 +119,7 @@
       {
         "command": "legado.nextChapter",
         "title": "下一章",
-        "category": "Legado Kuku",
+        "category": "Legado",
         "icon": {
           "light": "media/icons/nextChapter.svg",
           "dark": "media/icons/nextChapter_dark.svg"
@@ -127,7 +128,7 @@
       {
         "command": "legado.refreshTextBody",
         "title": "刷新文章",
-        "category": "Legado Kuku",
+        "category": "Legado",
         "icon": {
           "light": "media/icons/refresh.svg",
           "dark": "media/icons/refresh_dark.svg"
@@ -136,7 +137,7 @@
       {
         "command": "legado.showBookInfo",
         "title": "当前阅读信息",
-        "category": "Legado Kuku",
+        "category": "Legado",
         "icon": {
           "light": "media/icons/showBookInfo.svg",
           "dark": "media/icons/showBookInfo_dark.svg"
@@ -145,7 +146,7 @@
       {
         "command": "legado.toggleActionBar",
         "title": "切换工具栏",
-        "category": "Legado Kuku",
+        "category": "Legado",
         "icon": {
           "light": "media/icons/toggleBar.svg",
           "dark": "media/icons/toggleBar_dark.svg"
@@ -154,7 +155,7 @@
       {
         "command": "legado.toggleInlineRead",
         "title": "行内阅读",
-        "category": "Legado Kuku",
+        "category": "Legado",
         "icon": {
           "light": "media/icons/inlineRead.svg",
           "dark": "media/icons/inlineRead_dark.svg"
@@ -163,7 +164,7 @@
       {
         "command": "legado.inlinePrevChunk",
         "title": "上一页",
-        "category": "Legado Kuku",
+        "category": "Legado",
         "icon": {
           "light": "media/icons/previousChapter.svg",
           "dark": "media/icons/previousChapter_dark.svg"
@@ -172,7 +173,7 @@
       {
         "command": "legado.inlineNextChunk",
         "title": "下一页",
-        "category": "Legado Kuku",
+        "category": "Legado",
         "icon": {
           "light": "media/icons/nextChapter.svg",
           "dark": "media/icons/nextChapter_dark.svg"
@@ -181,7 +182,7 @@
       {
         "command": "legado.openSettings",
         "title": "打开设置",
-        "category": "Legado Kuku"
+        "category": "Legado"
       }
     ],
     "keybindings": [

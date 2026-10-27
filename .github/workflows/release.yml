@@ -113,9 +113,9 @@ jobs:
           set -euo pipefail
 
           SHORT_SHA="${SHA:0:7}"
-          TITLE="Legado Kuku ${VERSION}"
+          TITLE="Legado ${VERSION}"
           NOTES="$(cat <<EOF
-          ## Legado Kuku ${VERSION}
+          ## Legado ${VERSION}
 
           - Commit: \`${SHORT_SHA}\`
           - IntelliJ: \`${ZIP_NAME}\`

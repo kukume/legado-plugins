@@ -49,7 +49,7 @@ tasks {
     }
 
     named<org.gradle.api.tasks.bundling.Zip>("buildPlugin") {
-        archiveBaseName.set("legado-kuku")
+        archiveBaseName.set("legado")
     }
 
     signPlugin {

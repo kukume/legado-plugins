@@ -2,7 +2,7 @@
 
 IntelliJ IDEA 插件。合并到主分支后，zip 会随 GitHub Release 一起发布。
 
-对接阅读 Web 的开放接口：在 Settings → Tools → Legado Kuku 中填写服务器地址和 API Key（在阅读 Web 的“我的 → API Key”中创建）。
+对接阅读 Web 的开放接口：在 Settings → Tools → Legado 中填写服务器地址和 API Key（在阅读 Web 的“我的 → API Key”中创建）。
 
 兼容 IntelliJ Platform 2025.2（build 252）及以上。
 

@@ -5,7 +5,7 @@
 
     <!-- Public plugin name should be written in Title Case.
          Guidelines: https://plugins.jetbrains.com/docs/marketplace/plugin-overview-page.html#plugin-name -->
-    <name>Legado Kuku</name>
+    <name>Legado</name>
 
     <!-- A displayed Vendor name or Organization ID displayed on the Plugins Page. -->
     <vendor email="i@kuku.me" url="https://kuku.me">kuku</vendor>
@@ -15,7 +15,7 @@
          Guidelines: https://plugins.jetbrains.com/docs/marketplace/plugin-overview-page.html#plugin-description -->
     <description><![CDATA[
     Read novels from your Legado Web server in the IDE, including the bookshelf, chapters, and reading progress.<br>
-    在 Settings → Tools → Legado Kuku 中填写阅读 Web 的服务器地址和 API Key（我的 → API Key，<code>lgd_</code> 开头）。只支持文字书。<br>
+    在 Settings → Tools → Legado 中填写阅读 Web 的服务器地址和 API Key（我的 → API Key，<code>lgd_</code> 开头）。只支持文字书。<br>
     <em>Code it, and read it.</em>
   ]]></description>
 
@@ -40,10 +40,10 @@
          Read more: https://plugins.jetbrains.com/docs/intellij/plugin-extension-points.html -->
     <extensions defaultExtensionNs="com.intellij">
         <projectConfigurable id="me.kuku.legado.setting"
-                             groupId="tools" displayName="Legado Kuku"
+                             groupId="tools" displayName="Legado"
                              instance="me.kuku.legado.gui.SettingFactory"/>
 
-        <toolWindow id="Legado Kuku"
+        <toolWindow id="Legado"
                     secondary="true"
                     anchor="right" factoryClass="me.kuku.legado.toolwindow.IndexWindowFactory" icon="/META-INF/pluginIcon.svg">
         </toolWindow>
