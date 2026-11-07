@@ -17,6 +17,16 @@ export function getChunkSize(): number {
   return clampChunkSize(n ?? DEFAULT_CHUNK_SIZE);
 }
 
+/** 行内阅读的显示方式：style 为 plain（普通）或 comment（伪装成注释）；color 为空时跟随主题；hideOnType 编辑代码时隐藏 */
+export function getInlineReadOptions(): { style: "plain" | "comment"; color: string; hideOnType: boolean } {
+  const c = vscode.workspace.getConfiguration("legado");
+  return {
+    style: c.get<string>("inlineReadStyle") === "comment" ? "comment" : "plain",
+    color: (c.get<string>("inlineReadColor") || "").trim(),
+    hideOnType: c.get<boolean>("inlineReadHideOnType") !== false,
+  };
+}
+
 /** 行内阅读字号。0 表示跟随编辑器字号。 */
 export function getInlineReadFontSize(): number {
   const configured = vscode.workspace.getConfiguration("legado").get<number>("inlineReadFontSize") ?? 0;

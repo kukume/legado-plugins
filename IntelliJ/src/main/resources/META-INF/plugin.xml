@@ -15,11 +15,21 @@
          Guidelines: https://plugins.jetbrains.com/docs/marketplace/plugin-overview-page.html#plugin-description -->
     <description><![CDATA[
     Read novels from your Legado Web server in the IDE, including the bookshelf, chapters, and reading progress.<br>
+    <b>Requires a self-hosted <a href="https://github.com/kukume/legado-web">Legado Web</a> server.</b> This plugin is only a client.<br>
+    <b>需要先自行搭建 <a href="https://github.com/kukume/legado-web">阅读 Web（legado-web）</a> 服务端</b>，。<br>
     在 Settings → Tools → Legado 中填写阅读 Web 的服务器地址和 API Key（我的 → API Key，<code>lgd_</code> 开头）。只支持文字书。<br>
     <em>Code it, and read it.</em>
   ]]></description>
 
     <change-notes><![CDATA[
+        <h2>V1.1.0</h2>
+        <ul>
+            <li>多端同步：在网页、手机或另一个 IDE 里读同一本书时，翻章和滚动自动跟随</li>
+            <li>记住章内阅读位置，重新打开时回到上次读到的地方</li>
+            <li>阅读时长和字数计入阅读 Web 的“我的 → 阅读统计”</li>
+            <li>同时打开多个项目时，每个项目有自己的阅读窗口，不再互相抢占（原来后打开的项目会让先打开的变成空白）</li>
+            <li>修复：快速切换章节时可能显示旧章节；设置字号为 0 时正文看不见；进度序号在有卷名的书里错位</li>
+        </ul>
         <h2>V1.0.0</h2>
         <h3>特性</h3>
         <ul>

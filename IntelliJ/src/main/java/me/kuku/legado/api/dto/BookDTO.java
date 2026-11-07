@@ -44,7 +44,8 @@ public class BookDTO {
     @JsonProperty("durChapterIndex")
     private Integer durChapterIndex = 0;
 
-    /** 章节内阅读位置（本地使用：正文中的字符偏移） */
+    /** 章节内阅读位置（比例 0~10000：视口顶部在本章内容中的位置，与网页版相同） */
+    @JsonProperty("durChapterPos")
     private Integer durChapterPos = 0;
 
     /** 当前阅读章节标题 */

@@ -4,11 +4,17 @@ import com.intellij.openapi.actionSystem.ActionManager;
 import com.intellij.openapi.actionSystem.ActionToolbar;
 import com.intellij.openapi.actionSystem.DefaultActionGroup;
 import com.intellij.openapi.application.ApplicationManager;
+import com.intellij.openapi.project.Project;
+import com.intellij.openapi.util.Disposer;
+import com.intellij.openapi.wm.ToolWindow;
 import me.kuku.legado.api.ApiUtils;
+import me.kuku.legado.api.ProgressEvent;
+import me.kuku.legado.api.ProgressStream;
+import me.kuku.legado.api.ReadingStatsReporter;
+import com.intellij.openapi.wm.WindowManager;
 import me.kuku.legado.api.dto.BookChapterDTO;
 import me.kuku.legado.api.dto.BookDTO;
 import me.kuku.legado.common.Constant;
-import me.kuku.legado.dao.CurrentReadData;
 import me.kuku.legado.inline.InlineReadMode;
 import me.kuku.legado.state.State;
 import lombok.Getter;
@@ -32,8 +38,11 @@ import java.awt.event.MouseWheelListener;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.Collection;
+import java.util.Map;
 import java.util.Vector;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 
 @Getter
 public class IndexUI {
@@ -80,7 +89,17 @@ public class IndexUI {
 
     private List<BookDTO> bookshelf = new ArrayList<>();
 
-    private static final DefaultTableModel BOOK_SHELF_TABLE_MODEL = new DefaultTableModel(null, new String[]{"name", "current", "source", "author"}) {
+    // ---------- 当前阅读（每个项目的阅读窗口各自一份） ----------
+    /** 正在读的书 */
+    private BookDTO book = new BookDTO();
+    /** 目录（已去掉卷名） */
+    private List<BookChapterDTO> bookChapterList = new ArrayList<>();
+    /** 当前章节在目录列表中的下标 */
+    private int bookIndex = -1;
+    /** 当前章节的正文（纯文本，行内阅读使用） */
+    private String bodyContent = "";
+
+    private final DefaultTableModel bookShelfTableModel = new DefaultTableModel(null, new String[]{"name", "current", "source", "author"}) {
         @Override
         public boolean isCellEditable(int row, int column) {
             // 表格不允许被编辑
@@ -164,9 +183,70 @@ public class IndexUI {
         }
     };
 
-    private static final IndexUI INSTANCE = new IndexUI();
+    /** 滚动停下这么久后保存章内位置 */
+    private static final int SAVE_DELAY_MS = 1500;
+    /** 本端最近这么久内有操作时，不跟随其他端的进度（免得两边互相拉扯） */
+    private static final long LOCAL_ACTIVE_MS = 3000;
 
-    public IndexUI() {
+    /** 每次加载章节加一：连续切换章节时，先发出、后返回的旧结果不能覆盖新章节（只在 EDT 上读写） */
+    private int loadSeq = 0;
+    /** 正文是否在加载中（加载期间的滚动不算阅读位置） */
+    private boolean bodyLoading = false;
+    /** 当前章内位置（0~10000：视口顶部在本章内容中的位置） */
+    private int currentPos = 0;
+    /** 最近一次本端的用户操作（滚动、按键、切换章节、行内阅读翻页） */
+    private long lastLocalInput = 0;
+    /** 刚跟随其他端跳转：这段时间内不保存进度（位置就是服务器上的进度，存回去会让其他端又跟着跳） */
+    private long remoteUntil = 0;
+    /** 保存章内位置的延时（单次） */
+    private final Timer saveTimer = new Timer(SAVE_DELAY_MS, e -> saveCurrentPosition());
+
+    /** 所在的项目和工具窗口（阅读统计判断窗口是否在前台、工具窗口是否显示） */
+    @Nullable
+    private Project project;
+    @Nullable
+    private ToolWindow toolWindow;
+    /** 阅读统计（时长、字数，与网页合在一起） */
+    private final ReadingStatsReporter stats = new ReadingStatsReporter(this::readingBookId);
+    /** bodyContent 是哪一章（目录列表下标）的正文：翻到下一章时把它的字数计入阅读统计 */
+    private int loadedIndex = -1;
+
+    /** 每个项目一个阅读窗口（同时打开多个项目时各读各的，互不抢占） */
+    private static final Map<Project, IndexUI> INSTANCES = new ConcurrentHashMap<>();
+
+    /** 多端同步的监听（关闭项目时移除） */
+    private final kotlin.jvm.functions.Function1<ProgressEvent, kotlin.Unit> progressListener = event -> {
+        onRemoteProgress(event);
+        return kotlin.Unit.INSTANCE;
+    };
+
+    /** 创建项目的阅读窗口（工具窗口第一次打开时），随工具窗口一起释放 */
+    @NotNull
+    public static IndexUI create(@NotNull Project project, @NotNull ToolWindow toolWindow) {
+        IndexUI ui = new IndexUI();
+        ui.project = project;
+        ui.toolWindow = toolWindow;
+        INSTANCES.put(project, ui);
+        Disposer.register(toolWindow.getDisposable(), () -> {
+            INSTANCES.remove(project, ui);
+            ui.dispose();
+        });
+        return ui;
+    }
+
+    /** 项目的阅读窗口；该项目还没打开过 Legado 工具窗口时为 null */
+    @Nullable
+    public static IndexUI getInstance(@NotNull Project project) {
+        return INSTANCES.get(project);
+    }
+
+    /** 所有项目的阅读窗口（修改设置后统一应用字体等） */
+    @NotNull
+    public static Collection<IndexUI> instances() {
+        return INSTANCES.values();
+    }
+
+    private IndexUI() {
         // 隐藏正文面板
         textBodyPanel.setVisible(false);
 
@@ -176,7 +256,7 @@ public class IndexUI {
         errorTipsPane.setEditable(false);
 
         // 设置书架面板的表格数据格式
-        bookshelfTable.setModel(IndexUI.BOOK_SHELF_TABLE_MODEL);
+        bookshelfTable.setModel(bookShelfTableModel);
 
         final ActionManager actionManager = ActionManager.getInstance();
         ActionToolbar shelfBar = actionManager.createActionToolbar(Constant.PLUGIN_SHELF_BAR_ID, (DefaultActionGroup) actionManager.getAction(Constant.PLUGIN_SHELF_BAR_ID), true);
@@ -199,6 +279,202 @@ public class IndexUI {
         textBodyScrollPane.getVerticalScrollBar().addAdjustmentListener(preload());
         // 正文阅读：滚轮平滑滚动，避免默认 JScrollPane 步进瞬移
         installSmoothScrolling(textBodyScrollPane);
+
+        // 多端同步：用户滚动后保存章内位置；其他端保存的进度推送过来时跟着翻章、滚动
+        saveTimer.setRepeats(false);
+        textBodyScrollPane.getVerticalScrollBar().addAdjustmentListener(e -> onBodyScrolled());
+        textBodyScrollPane.getVerticalScrollBar().addMouseListener(new MouseAdapter() {
+            @Override
+            public void mousePressed(MouseEvent e) {
+                markLocalInput();
+            }
+        });
+        textBodyPane.addKeyListener(new java.awt.event.KeyAdapter() {
+            @Override
+            public void keyPressed(java.awt.event.KeyEvent e) {
+                markLocalInput();
+            }
+        });
+        ProgressStream.addListener(progressListener);
+        ProgressStream.restart();
+    }
+
+    private void dispose() {
+        stats.dispose();
+        ProgressStream.removeListener(progressListener);
+        saveTimer.stop();
+        stopSmoothScroll();
+        hideChapterPopup();
+        InlineReadMode.readerClosed(this);
+    }
+
+    /** 当前章节；还没打开章节时为 null */
+    @Nullable
+    public BookChapterDTO currentChapter() {
+        return bookIndex >= 0 && bookIndex < bookChapterList.size() ? bookChapterList.get(bookIndex) : null;
+    }
+
+    /** 行内阅读翻到下一章 / 上一章时改当前章节，随后调用 switchChapter */
+    public void setBookIndex(int index) {
+        this.bookIndex = index;
+    }
+
+    public void nextChapter() {
+        if (bookIndex + 1 >= bookChapterList.size()) {
+            return;
+        }
+        bookIndex++;
+        switchChapter(0);
+    }
+
+    public void previousChapter() {
+        if (bookIndex < 1) {
+            return;
+        }
+        bookIndex--;
+        switchChapter(0);
+    }
+
+    // ---------------- 多端同步 ----------------
+
+    private void markLocalInput() {
+        lastLocalInput = System.currentTimeMillis();
+        stats.touch();
+    }
+
+    /** 正在显示正文的书（阅读统计计时用）：IDE 窗口在前台，工具窗口显示着或行内阅读正在显示；否则为 0 */
+    private long readingBookId() {
+        Long id = book.getId();
+        if (!readingMode || bodyLoading || id == null || project == null || project.isDisposed()) {
+            return 0;
+        }
+        JFrame frame = WindowManager.getInstance().getFrame(project);
+        if (frame == null || !frame.isActive()) {
+            return 0;
+        }
+        boolean shown = (toolWindow != null && toolWindow.isVisible()) || InlineReadMode.isShowingFor(this);
+        return shown ? id : 0;
+    }
+
+    /** 正文滚动：用户自己滚动的才记为阅读位置（恢复位置、跟随其他端引起的滚动不算） */
+    private void onBodyScrolled() {
+        if (!readingMode || bodyLoading || System.currentTimeMillis() - lastLocalInput > 1500) {
+            return;
+        }
+        JScrollBar bar = textBodyScrollPane.getVerticalScrollBar();
+        int max = bar.getMaximum();
+        currentPos = max > 0 ? (int) Math.round(bar.getValue() * 10000.0 / max) : 0;
+        saveTimer.restart();
+    }
+
+    /** 行内阅读翻段后保存章内位置（0~10000） */
+    public void onInlinePosition(int pos) {
+        markLocalInput();
+        currentPos = pos;
+        saveTimer.restart();
+    }
+
+    private void saveCurrentPosition() {
+        if (!readingMode || System.currentTimeMillis() < remoteUntil) {
+            return;
+        }
+        saveProgressAsync(bookIndex, currentPos);
+    }
+
+    /**
+     * 保存进度，并转发给同一个 IDE 里的其他项目窗口（服务器不会把本 IDE 保存的进度推送回来）
+     */
+    private void saveProgressAsync(int index, int pos) {
+        BookDTO book = this.book;
+        List<BookChapterDTO> chapters = this.bookChapterList;
+        if (index < 0 || index >= chapters.size() || book.getId() == null) {
+            return;
+        }
+        BookChapterDTO chapter = chapters.get(index);
+        if (chapter.getIndex() != null) {
+            ProgressStream.publishLocal(new ProgressEvent(book.getId(), chapter.getIndex(), pos, chapter.getTitle()), progressListener);
+        }
+        CompletableFuture.runAsync(() -> ApiUtils.saveBookProgress(book, chapters, index, pos));
+    }
+
+    /** 滚动到章内位置 pos（0~10000）；正文刚设置时布局还没完成，等布局后再滚 */
+    private void scrollToPosition(int pos) {
+        Runnable go = () -> {
+            JScrollBar bar = textBodyScrollPane.getVerticalScrollBar();
+            bar.setValue((int) Math.round(pos / 10000.0 * bar.getMaximum()));
+        };
+        SwingUtilities.invokeLater(() -> {
+            go.run();
+            SwingUtilities.invokeLater(go);
+        });
+    }
+
+    /**
+     * 其他端（网页、手机、另一个 IDE）保存了进度（在 EDT 上调用）：正在读同一本书时跟着翻章、滚动；
+     * 不在读这本书时只更新书架上显示的进度
+     */
+    private void onRemoteProgress(ProgressEvent e) {
+        boolean shelfChanged = false;
+        for (BookDTO b : bookshelf) {
+            if (Objects.equals(b.getId(), e.getBookId())) {
+                b.setDurChapterIndex(e.getIndex());
+                b.setDurChapterPos(e.getPos());
+                if (e.getTitle() != null) {
+                    b.setDurChapterTitle(e.getTitle());
+                }
+                shelfChanged = true;
+            }
+        }
+        BookDTO book = this.book;
+        if (!readingMode || book == null || !Objects.equals(book.getId(), e.getBookId())) {
+            if (!readingMode && shelfChanged) {
+                setBookshelfUI(bookshelf);
+            }
+            return;
+        }
+        if (System.currentTimeMillis() - lastLocalInput < LOCAL_ACTIVE_MS) {
+            return;
+        }
+        List<BookChapterDTO> chapters = bookChapterList;
+        int target = -1;
+        for (int i = 0; i < chapters.size(); i++) {
+            Integer idx = chapters.get(i).getIndex();
+            if (idx != null && idx == e.getIndex()) {
+                target = i;
+                break;
+            }
+        }
+        if (target < 0) {
+            // 进度停在卷名上：取它后面的第一章
+            for (int i = 0; i < chapters.size(); i++) {
+                Integer idx = chapters.get(i).getIndex();
+                if (idx != null && idx > e.getIndex()) {
+                    target = i;
+                    break;
+                }
+            }
+        }
+        if (target < 0) {
+            return;
+        }
+        if (target == bookIndex && Math.abs(e.getPos() - currentPos) < 30) {
+            return;
+        }
+        remoteUntil = System.currentTimeMillis() + LOCAL_ACTIVE_MS;
+        saveTimer.stop();
+        book.setDurChapterIndex(e.getIndex());
+        book.setDurChapterPos(e.getPos());
+        if (target == bookIndex && !bodyLoading) {
+            currentPos = e.getPos();
+            // 滑动过去（与滚轮滚动同样的缓动），看得出是跟着其他端动的
+            JScrollBar bar = textBodyScrollPane.getVerticalScrollBar();
+            smoothScrollBy(bar, (int) Math.round(e.getPos() / 10000.0 * bar.getMaximum()));
+            InlineReadMode.applyPosition(this, e.getPos());
+            return;
+        }
+        this.bookIndex = target;
+        InlineReadMode.resetToFirstChunk(this);
+        switchChapter(e.getPos(), false);
     }
 
     /**
@@ -553,13 +829,13 @@ public class IndexUI {
      * 以当前章节为中心，初始化/重置为最近 CHAPTER_PAGE 章窗口。
      */
     private void resetChapterWindowAroundCurrent() {
-        List<BookChapterDTO> chapters = CurrentReadData.getBookChapterList();
+        List<BookChapterDTO> chapters = bookChapterList;
         if (chapters == null || chapters.isEmpty()) {
             chapterWindowStart = 0;
             chapterWindowEnd = 0;
             return;
         }
-        int idx = CurrentReadData.getBookIndex();
+        int idx = bookIndex;
         if (idx < 0) {
             idx = 0;
         }
@@ -575,11 +851,11 @@ public class IndexUI {
     }
 
     private void ensureCurrentChapterInWindow() {
-        List<BookChapterDTO> chapters = CurrentReadData.getBookChapterList();
+        List<BookChapterDTO> chapters = bookChapterList;
         if (chapters == null || chapters.isEmpty()) {
             return;
         }
-        int idx = CurrentReadData.getBookIndex();
+        int idx = bookIndex;
         if (idx < 0 || idx >= chapters.size()) {
             return;
         }
@@ -603,7 +879,7 @@ public class IndexUI {
         Runnable task = () -> {
             chapterListUpdating = true;
             try {
-                List<BookChapterDTO> chapters = CurrentReadData.getBookChapterList();
+                List<BookChapterDTO> chapters = bookChapterList;
                 chapterListModel.clear();
                 if (chapters == null || chapters.isEmpty()) {
                     chapterCombo.setEnabled(false);
@@ -651,7 +927,7 @@ public class IndexUI {
     }
 
     private void updateCollapsedComboDisplay(List<BookChapterDTO> chapters) {
-        int idx = CurrentReadData.getBookIndex();
+        int idx = bookIndex;
         DefaultComboBoxModel<ChapterOption> model = new DefaultComboBoxModel<>();
         if (idx >= 0 && idx < chapters.size()) {
             model.addElement(toChapterOption(idx, chapters.get(idx)));
@@ -671,7 +947,7 @@ public class IndexUI {
     }
 
     private void selectCurrentChapterInList() {
-        int idx = CurrentReadData.getBookIndex();
+        int idx = bookIndex;
         for (int i = 0; i < chapterListModel.size(); i++) {
             ChapterOption opt = chapterListModel.getElementAt(i);
             if (opt != null && opt.type == ChapterOption.Type.CHAPTER && opt.index == idx) {
@@ -698,7 +974,7 @@ public class IndexUI {
      * 向上扩展章节窗口：原地改 model，弹层保持打开，无闪烁。
      */
     private void expandChapterWindowPrev() {
-        List<BookChapterDTO> chapters = CurrentReadData.getBookChapterList();
+        List<BookChapterDTO> chapters = bookChapterList;
         if (chapters == null || chapters.isEmpty() || chapterWindowStart <= 0) {
             selectCurrentChapterInList();
             return;
@@ -747,7 +1023,7 @@ public class IndexUI {
      * 向下扩展章节窗口：原地改 model，弹层保持打开，无闪烁。
      */
     private void expandChapterWindowNext() {
-        List<BookChapterDTO> chapters = CurrentReadData.getBookChapterList();
+        List<BookChapterDTO> chapters = bookChapterList;
         int size = chapters == null ? 0 : chapters.size();
         if (chapters == null || size == 0 || chapterWindowEnd >= size) {
             selectCurrentChapterInList();
@@ -788,7 +1064,7 @@ public class IndexUI {
         if (chapterListUpdating) {
             return;
         }
-        List<BookChapterDTO> chapters = CurrentReadData.getBookChapterList();
+        List<BookChapterDTO> chapters = bookChapterList;
         int size = chapters == null ? 0 : chapters.size();
 
         if (opt.type == ChapterOption.Type.MORE_PREV) {
@@ -805,16 +1081,11 @@ public class IndexUI {
             return;
         }
         // 点当前章：只关弹层
-        if (target == CurrentReadData.getBookIndex()) {
+        if (target == bookIndex) {
             hideChapterPopup();
             return;
         }
-        CurrentReadData.setBookIndex(target);
-        BookDTO book = CurrentReadData.getBook();
-        if (book != null) {
-            book.setDurChapterIndex(target);
-            book.setDurChapterTitle(opt.title);
-        }
+        this.bookIndex = target;
         hideChapterPopup();
         switchChapter(0);
     }
@@ -833,6 +1104,7 @@ public class IndexUI {
             if (!scrollPane.isWheelScrollingEnabled()) {
                 return;
             }
+            markLocalInput();
             // Shift + 滚轮：横向
             if (e.isShiftDown()) {
                 JScrollBar hBar = scrollPane.getHorizontalScrollBar();
@@ -917,16 +1189,21 @@ public class IndexUI {
                 progress = (double) value / totalRange;
             }
             if (progress > 0.5) {
-                BookDTO book = CurrentReadData.getBook();
-                int nextIndex = CurrentReadData.getBookIndex() + 1;
-                if (nextIndex >= CurrentReadData.getBookChapterList().size()) {
+                BookDTO book = this.book;
+                int nextIndex = bookIndex + 1;
+                if (nextIndex >= bookChapterList.size()) {
                     return;
                 }
                 String key = book.getId() + ":" + nextIndex;
                 if (!Objects.equals(key, currentPreLoad)) {
                     currentPreLoad = key;
+                    List<BookChapterDTO> chapters = bookChapterList;
                     ApplicationManager.getApplication().executeOnPooledThread(() -> {
-                        ApiUtils.getBookContent(book, nextIndex);
+                        try {
+                            ApiUtils.getBookContent(book, chapters, nextIndex);
+                        } catch (Exception ignored) {
+                            // 预加载失败不影响阅读，翻到时再请求
+                        }
                     });
                 }
             }
@@ -938,42 +1215,49 @@ public class IndexUI {
         bookshelfPanel.setVisible(true);
         hideErrorTips();
         CompletableFuture.supplyAsync(ApiUtils::getBookshelf)
-                .thenAccept(books -> {
+                .whenComplete((books, throwable) -> SwingUtilities.invokeLater(() -> {
+                    if (throwable != null) {
+                        showErrorTips("获取书架列表失败: " + rootMessage(throwable));
+                        return;
+                    }
                     this.bookshelf = new ArrayList<>(books);
                     setBookshelfUI(books);
-                }).exceptionally(throwable -> {
-                    showErrorTips("获取书架列表失败: " + rootMessage(throwable));
-                    return null;
-                });
+                }));
     }
 
     public void refreshTextBody() {
         initTextBodyUI();
 
-        BookDTO book = CurrentReadData.getBook();
+        BookDTO book = this.book;
+        bodyLoading = true;
         CompletableFuture.supplyAsync(() -> ApiUtils.getChapterList(book))
-                .thenAccept(bookChapters -> {
+                .whenComplete((bookChapters, throwable) -> SwingUtilities.invokeLater(() -> {
+                    if (throwable != null) {
+                        bodyLoading = false;
+                        showErrorTips(rootMessage(throwable));
+                        return;
+                    }
                     // 保存章节列表
-                    CurrentReadData.setBookChapterList(bookChapters);
+                    this.bookChapterList = bookChapters;
 
-                    // 根据服务器上的阅读进度定位章节
+                    // 根据服务器上的阅读进度定位章节（book 里的进度是服务器目录序号，不是列表下标）
                     int index = ApiUtils.resolveChapterIndex(book, bookChapters);
-                    CurrentReadData.setBookIndex(index);
-                    book.setDurChapterIndex(index);
-                    if (index >= 0 && index < bookChapters.size()) {
-                        book.setDurChapterTitle(bookChapters.get(index).getTitle());
+                    this.bookIndex = index;
+                    // 进度正好在这一章时连章内位置一起恢复（进度停在卷名上时从下一章开头读）
+                    int pos = 0;
+                    if (index >= 0 && index < bookChapters.size()
+                            && Objects.equals(bookChapters.get(index).getIndex(), book.getDurChapterIndex())
+                            && book.getDurChapterPos() != null) {
+                        pos = book.getDurChapterPos();
                     }
 
                     // 章节下拉：只先展示当前附近 10 章
                     resetChapterWindowAroundCurrent();
                     rebuildChapterCombo();
 
-                    // 设置正文数据
-                    setTextBodyUIData(book.getDurChapterPos() == null ? 0 : book.getDurChapterPos());
-                }).exceptionally(throwable -> {
-                    showErrorTips(rootMessage(throwable));
-                    return null;
-                });
+                    // 设置正文数据（位置就是服务器上的进度，不用再保存）
+                    setTextBodyUIData(pos, false);
+                }));
     }
 
     private MouseAdapter toTextBodyMouseAdapter() {
@@ -990,8 +1274,8 @@ public class IndexUI {
                 setReadingMode(true);
                 // 保存当前阅读信息
                 BookDTO book = bookshelf.get(row);
-                CurrentReadData.setBook(book);
-                CurrentReadData.setBookIndex(book.getDurChapterIndex() == null ? 0 : book.getDurChapterIndex());
+                IndexUI.this.book = book;
+                IndexUI.this.bookIndex = -1;
                 refreshTextBody();
             }
         };
@@ -999,7 +1283,7 @@ public class IndexUI {
 
     private void setBookshelfUI(List<BookDTO> books) {
         // 清空表格
-        IndexUI.BOOK_SHELF_TABLE_MODEL.getDataVector().clear();
+        bookShelfTableModel.getDataVector().clear();
 
         // 添加表格数据
         books.stream().map(book -> {
@@ -1013,9 +1297,9 @@ public class IndexUI {
             bookVector.add(book.getOriginName());
             bookVector.add(book.getAuthor());
             return bookVector;
-        }).forEach(IndexUI.BOOK_SHELF_TABLE_MODEL::addRow);
+        }).forEach(bookShelfTableModel::addRow);
 
-        BOOK_SHELF_TABLE_MODEL.fireTableDataChanged();
+        bookShelfTableModel.fireTableDataChanged();
 
         if (!bookshelfScrollPane.isShowing()) {
             bookshelfScrollPane.setVisible(true);
@@ -1024,11 +1308,19 @@ public class IndexUI {
     }
 
     /**
-     * 切换章节
+     * 切换章节（用户操作：上下章按钮、目录、行内阅读翻到章末），并保存进度
      *
-     * @param durChapterPos 当前在章节中的位置
+     * @param durChapterPos 章内位置（0~10000）
      */
     public void switchChapter(int durChapterPos) {
+        markLocalInput();
+        switchChapter(durChapterPos, true);
+    }
+
+    /**
+     * @param save 是否保存进度（跟随其他端时不保存）
+     */
+    private void switchChapter(int durChapterPos, boolean save) {
         stopSmoothScroll();
         textBodyScrollPane.getVerticalScrollBar().setValue(0);
 
@@ -1036,7 +1328,7 @@ public class IndexUI {
         initTextBodyUI();
 
         // 设置正文数据
-        setTextBodyUIData(durChapterPos);
+        setTextBodyUIData(durChapterPos, save);
     }
 
     private void initTextBodyUI() {
@@ -1070,47 +1362,60 @@ public class IndexUI {
         }
     }
 
-    private void setTextBodyUIData(int durChapterPos) {
-        BookDTO book = CurrentReadData.getBook();
-        int index = CurrentReadData.getBookIndex();
-        if (index < 0 || index >= CurrentReadData.getBookChapterList().size()) {
+    /**
+     * @param durChapterPos 章内位置（0~10000）
+     * @param save          是否保存进度
+     */
+    private void setTextBodyUIData(int durChapterPos, boolean save) {
+        BookDTO book = this.book;
+        int index = bookIndex;
+        if (index < 0 || index >= bookChapterList.size()) {
+            bodyLoading = false;
             showErrorTips("章节下标无效");
             return;
         }
+        int seq = ++loadSeq;
+        // 自己翻到下一章：上一章算读完了（跟随其他端翻过来的 save 为 false，不算，那一端会自己统计）
+        if (save && index == loadedIndex + 1 && bodyContent != null && !bodyContent.isEmpty() && book.getId() != null) {
+            stats.addChars(book.getId(), bodyContent.replaceAll("\\s", "").length());
+        }
+        bodyLoading = true;
+        currentPos = durChapterPos;
+        saveTimer.stop();
 
         // 同步章节下拉选中项（上下章按钮切换时）
         rebuildChapterCombo();
 
         // 获取章节标题
-        String title = CurrentReadData.getBookChapter().getTitle();
+        String title = currentChapter().getTitle();
 
         // 用户主动换章时重置行内阅读分段（三击上一章末段由 InlineReadMode 自行处理）
-        InlineReadMode.resetToFirstChunk();
+        InlineReadMode.resetToFirstChunk(this);
+        List<BookChapterDTO> chapters = bookChapterList;
 
-        // 调用API获取正文内容
-        CompletableFuture.supplyAsync(() -> ApiUtils.getBookContent(book, index))
-                .thenAccept(bookContent -> {
-                    CurrentReadData.setBodyContent(bookContent);
-                    InlineReadMode.afterBodyLoaded();
-
-                    // 设置正文内容
-                    Runnable ui = () -> {
-                        textBodyPane.setText(title + "\n" + bookContent);
-                        int caret = Math.max(0, Math.min(durChapterPos, textBodyPane.getDocument().getLength()));
-                        textBodyPane.setCaretPosition(caret);
-                    };
-                    if (SwingUtilities.isEventDispatchThread()) {
-                        ui.run();
-                    } else {
-                        SwingUtilities.invokeLater(ui);
+        // 调用API获取正文内容；结果回到 EDT 上处理，期间又切换了章节时丢弃
+        CompletableFuture.supplyAsync(() -> ApiUtils.getBookContent(book, chapters, index))
+                .whenComplete((bookContent, throwable) -> SwingUtilities.invokeLater(() -> {
+                    if (seq != loadSeq) {
+                        return;
                     }
-                }).exceptionally(throwable -> {
-                    showErrorTips(rootMessage(throwable));
-                    return null;
-                });
+                    bodyLoading = false;
+                    if (throwable != null) {
+                        showErrorTips(rootMessage(throwable));
+                        return;
+                    }
+                    this.bodyContent = bookContent;
+                    this.loadedIndex = index;
+                    InlineReadMode.afterBodyLoaded(this, durChapterPos);
+                    textBodyPane.setText(title + "\n" + bookContent);
+                    textBodyPane.setCaretPosition(0);
+                    scrollToPosition(durChapterPos);
+                }));
 
         // 同步阅读进度
-        CompletableFuture.runAsync(() -> ApiUtils.saveBookProgress(book, index));
+        if (save) {
+            saveProgressAsync(index, durChapterPos);
+        }
     }
 
     private void hideErrorTips() {
@@ -1135,10 +1440,6 @@ public class IndexUI {
 
     public JComponent getComponent() {
         return rootPanel;
-    }
-
-    public static IndexUI getInstance() {
-        return INSTANCE;
     }
 
     /**

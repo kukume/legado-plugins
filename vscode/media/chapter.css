@@ -1,18 +1,70 @@
 html,
 body {
-  height: 100%;
   margin: 0;
   color: var(--vscode-editor-foreground);
   background: var(--vscode-editor-background);
   font-family: var(--vscode-editor-font-family, var(--vscode-font-family));
-  font-size: var(--vscode-editor-font-size, 16px);
+  font-size: var(--r-font-size, var(--vscode-editor-font-size, 16px));
+}
+
+/* 顶部操作栏：上一章、章节下拉框、下一章、进度。滚动时固定在顶部 */
+.bar {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  font-family: var(--vscode-font-family);
+  font-size: var(--vscode-font-size, 13px);
+  background: var(--vscode-editor-background);
+  border-bottom: 1px solid var(--vscode-panel-border, transparent);
+}
+
+.bar button,
+.end button {
+  padding: 3px 10px;
+  color: var(--vscode-button-secondaryForeground);
+  background: var(--vscode-button-secondaryBackground);
+  border: none;
+  border-radius: 2px;
+  font: inherit;
+  cursor: pointer;
+}
+
+.bar button:hover:not(:disabled),
+.end button:hover:not(:disabled) {
+  background: var(--vscode-button-secondaryHoverBackground);
+}
+
+.bar button:disabled,
+.end button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.bar select {
+  flex: 0 1 18em;
+  min-width: 6em;
+  padding: 2px 4px;
+  color: var(--vscode-dropdown-foreground);
+  background: var(--vscode-dropdown-background);
+  border: 1px solid var(--vscode-dropdown-border, transparent);
+  font: inherit;
+}
+
+.progress {
+  margin-left: auto;
+  color: var(--vscode-descriptionForeground);
+  white-space: nowrap;
 }
 
 .page {
   box-sizing: border-box;
-  max-width: 40em;
+  max-width: var(--r-width, 40em);
   margin: 0 auto;
-  padding: 28px 24px 64px;
+  padding: 28px 24px 48px;
 }
 
 h1 {
@@ -24,12 +76,35 @@ h1 {
 }
 
 .body {
-  margin: 0;
-  white-space: pre-wrap;
   overflow-wrap: anywhere;
   word-break: break-word;
-  line-height: 1.9;
-  letter-spacing: 0.02em;
+  line-height: var(--r-line-height, 1.9);
+  letter-spacing: var(--r-letter, 0.02em);
+  font-weight: var(--r-weight, 400);
+}
+
+.body p {
+  margin: 0 0 var(--r-para-gap, 0.6em);
+  text-indent: var(--r-indent, 2em);
+}
+
+/* 章末：下一章按钮，最后一章显示“全书完” */
+.end {
+  display: flex;
+  justify-content: center;
+  margin-top: 2em;
+}
+
+.end button {
+  padding: 6px 28px;
+}
+
+.end button[hidden] {
+  display: none;
+}
+
+.the-end {
+  color: var(--vscode-descriptionForeground);
 }
 
 .error {

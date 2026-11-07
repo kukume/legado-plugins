@@ -1,13 +1,19 @@
 import * as vscode from "vscode";
 import { ApiClient } from "./api";
-import { getBodyFont } from "./config";
+import { getApiConfig, getBodyFont } from "./config";
+import { ProgressEvent, ProgressStream } from "./events";
+import { ReadingStatsReporter } from "./stats";
 import { isConfigured } from "./apiKey";
-import { ChapterPanel, ChapterPanelState } from "./chapterPanel";
+import { ChapterPanel, ChapterPanelState, ReaderLayout } from "./chapterPanel";
 import { InlineReadController } from "./inlineRead";
 import { ReadSession } from "./session";
 import { Book, ChapterOption } from "./types";
 
 const CHAPTER_PAGE = 10;
+/** 滚动停下这么久后保存章内位置 */
+const SAVE_DELAY_MS = 1500;
+/** 本端最近这么久内有操作时，不跟随其他端的进度（免得两边互相拉扯） */
+const LOCAL_ACTIVE_MS = 3000;
 
 export class ReaderViewProvider implements vscode.WebviewViewProvider, vscode.Disposable {
   public static readonly viewId = "legado.reader";
@@ -16,6 +22,25 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider, vscode.Di
   private contentScrollTop = 0;
   private readonly chapterPanel: ChapterPanel;
   private readonly disposables: vscode.Disposable[] = [];
+  /** 多端同步：订阅其他端保存的进度 */
+  private readonly stream: ProgressStream;
+  /** 多端同步的日志（输出面板“Legado”） */
+  private readonly output = vscode.window.createOutputChannel("Legado");
+  /** 每次加载章节加一：连续切换章节时，先发出、后返回的旧结果不能覆盖新章节 */
+  private loadSeq = 0;
+  /** 当前章内位置（0~10000） */
+  private currentPos = 0;
+  private saveTimer: ReturnType<typeof setTimeout> | undefined;
+  /** 最近一次本端的用户操作（滚动正文、切换章节、行内阅读翻页） */
+  private lastLocalInput = 0;
+  /** 刚跟随其他端跳转：这段时间内不保存进度（位置就是服务器上的进度，存回去会让其他端又跟着跳） */
+  private remoteUntil = 0;
+  /** 网页“阅读设置”里的排版，编辑器面板按它显示 */
+  private layout: ReaderLayout = {};
+  /** 阅读统计（时长、字数，与网页合在一起） */
+  private readonly stats: ReadingStatsReporter;
+  /** session.body 是哪一章（目录列表下标）的正文：翻到下一章时把它的字数计入阅读统计 */
+  private loadedIndex = -1;
 
   constructor(
     private readonly context: vscode.ExtensionContext,
@@ -23,15 +48,44 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider, vscode.Di
     private readonly api: ApiClient,
     private readonly inline: InlineReadController
   ) {
-    this.chapterPanel = new ChapterPanel(context, (type) => {
-      if (type === "prevChapter") {
-        void this.previousChapter();
-      } else {
-        void this.nextChapter();
+    this.chapterPanel = new ChapterPanel(
+      context,
+      (type) => {
+        if (type === "prevChapter") {
+          void this.previousChapter();
+        } else {
+          void this.nextChapter();
+        }
+      },
+      (index, ratio, user) => this.onBodyScrolled(index, ratio, user),
+      (index) => void this.selectChapter(index),
+      // 面板打开时侧栏只留目录和按钮，关闭后恢复显示正文
+      () => this.postState()
+    );
+    this.stream = new ProgressStream(
+      getApiConfig,
+      api.clientId,
+      (e) => this.onRemoteProgress(e),
+      (msg) => this.log(msg)
+    );
+    if (getConfigured()) {
+      this.stream.start();
+    }
+    this.inline.onUserPosition = (pos) => this.onInlinePosition(pos);
+    // 正文正在显示（侧栏、编辑器面板或行内阅读）时才计阅读时间
+    this.stats = new ReadingStatsReporter(api, () => {
+      const book = this.session.book;
+      if (!this.session.reading || !book || this.session.loading) {
+        return 0;
       }
+      const shown = (this.view?.visible && !this.chapterPanel.isOpen) || this.chapterPanel.isVisible || this.inline.isShowing;
+      return shown ? book.id : 0;
     });
     this.disposables.push(
       this.chapterPanel,
+      this.stats,
+      this.stream,
+      this.output,
       vscode.workspace.onDidChangeConfiguration((e) => {
         if (!e.affectsConfiguration("legado")) {
           return;
@@ -39,6 +93,11 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider, vscode.Di
         this.postState();
         this.inline.refresh();
         if (e.affectsConfiguration("legado.apiKey") || e.affectsConfiguration("legado.address")) {
+          if (getConfigured()) {
+            this.stream.restart();
+          } else {
+            this.stream.stop();
+          }
           if (!this.session.reading && getConfigured()) {
             void this.refreshBookshelf();
           }
@@ -48,6 +107,9 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider, vscode.Di
   }
 
   dispose(): void {
+    if (this.saveTimer) {
+      clearTimeout(this.saveTimer);
+    }
     for (const d of this.disposables) {
       d.dispose();
     }
@@ -55,6 +117,12 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider, vscode.Di
 
   resolveWebviewView(webviewView: vscode.WebviewView): void {
     this.view = webviewView;
+    // 侧栏视图被关闭（移走、重置布局等）后不再向它发消息
+    webviewView.onDidDispose(() => {
+      if (this.view === webviewView) {
+        this.view = undefined;
+      }
+    });
     webviewView.webview.options = {
       enableScripts: true,
       localResourceRoots: [vscode.Uri.joinPath(this.context.extensionUri, "media")],
@@ -104,6 +172,11 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider, vscode.Di
   }
 
   async openBook(book: Book): Promise<void> {
+    // 排版与网页的阅读设置相同（每次打开书时取一次，网页里改了设置后重新打开书即可生效）
+    void this.api.getReaderConfig().then((l) => {
+      this.layout = l as ReaderLayout;
+      this.chapterPanel.sync(this.editorState());
+    });
     this.session.book = book;
     this.session.index = book.durChapterIndex ?? 0;
     this.session.reading = true;
@@ -117,12 +190,10 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider, vscode.Di
       this.session.chapters = chapters;
       const index = this.api.resolveChapterIndex(book, chapters);
       this.session.index = index;
-      book.durChapterIndex = index;
-      if (index >= 0 && index < chapters.length) {
-        book.durChapterTitle = chapters[index].title;
-      }
+      // 回到服务器上的进度：进度正好在这一章时连章内位置一起恢复（进度停在卷名上时从下一章开头读）
+      const pos = chapters[index]?.index === book.durChapterIndex ? book.durChapterPos ?? 0 : 0;
       this.session.resetChapterWindow(CHAPTER_PAGE);
-      await this.loadCurrentChapter(book.durChapterPos ?? 0);
+      await this.loadCurrentChapter(pos, false);
     } catch (e) {
       this.session.loading = false;
       this.session.error = rootMessage(e);
@@ -134,6 +205,7 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider, vscode.Di
     if (this.session.index < 1) {
       return;
     }
+    this.markLocalInput();
     this.session.index -= 1;
     await this.switchChapter(0);
   }
@@ -142,6 +214,7 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider, vscode.Di
     if (this.session.index + 1 >= this.session.chapters.length) {
       return;
     }
+    this.markLocalInput();
     this.session.index += 1;
     await this.switchChapter(0);
   }
@@ -183,7 +256,11 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider, vscode.Di
     this.chapterPanel.show(this.editorState());
   }
 
-  private async loadCurrentChapter(pos: number): Promise<void> {
+  /**
+   * 加载当前章节（session.index）并滚动到 pos（0~10000）。
+   * save：是否保存进度（打开书、跟随其他端时位置就是服务器上的进度，不用保存）
+   */
+  private async loadCurrentChapter(pos: number, save = true): Promise<void> {
     const book = this.session.book;
     if (!book) {
       return;
@@ -200,23 +277,144 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider, vscode.Di
     this.session.error = "";
     this.postState({ scrollTo: 0 });
     const index = this.session.index;
+    const seq = ++this.loadSeq;
+    this.currentPos = pos;
+    // 自己翻到下一章：上一章算读完了（跟随其他端翻过来的不算，那一端会自己统计）
+    if (save && index === this.loadedIndex + 1 && this.session.body) {
+      this.stats.addChars(book.id, this.session.body.replace(/\s/g, "").length);
+    }
+    if (this.saveTimer) {
+      clearTimeout(this.saveTimer);
+      this.saveTimer = undefined;
+    }
     try {
       const content = await this.api.getBookContent(book, this.session.chapters, index);
+      if (seq !== this.loadSeq) {
+        return;
+      }
       this.session.body = content;
-      this.inline.afterBodyLoaded();
-      book.durChapterIndex = index;
-      book.durChapterTitle = this.session.chapters[index]?.title;
+      this.loadedIndex = index;
+      this.inline.afterBodyLoaded(pos);
       this.session.loading = false;
       this.session.error = "";
-      this.postState({ scrollTo: pos });
+      this.postState({ scrollRatio: pos / 10000 });
     } catch (e) {
+      if (seq !== this.loadSeq) {
+        return;
+      }
       this.session.body = "";
+      this.loadedIndex = -1;
       this.inline.afterBodyLoaded();
       this.session.loading = false;
       this.session.error = rootMessage(e);
       this.postState();
     }
-    void this.api.saveBookProgress(book, this.session.chapters, index);
+    if (save) {
+      void this.api.saveBookProgress(book, this.session.chapters, index, pos);
+    }
+  }
+
+  // ---------------- 多端同步 ----------------
+
+  private markLocalInput(): void {
+    this.lastLocalInput = Date.now();
+    this.stats.touch();
+    // 跟随其他端之后用户自己又操作了：照常保存（否则这几秒内的翻章、滚动不会保存）
+    this.remoteUntil = 0;
+  }
+
+  /** 侧栏或编辑器里的正文滚动：只有用户自己滚动才记为进度（跟随其他端、恢复位置引起的滚动不算） */
+  private onBodyScrolled(index: number, ratio: number, user: boolean): void {
+    if (index !== this.session.index || !user || this.session.loading) {
+      return;
+    }
+    this.markLocalInput();
+    this.currentPos = Math.max(0, Math.min(10000, Math.round(ratio * 10000)));
+    this.scheduleSave();
+  }
+
+  /** 滚动或行内阅读翻页后，停一会儿再保存章内位置 */
+  private scheduleSave(): void {
+    if (this.saveTimer) {
+      clearTimeout(this.saveTimer);
+    }
+    this.saveTimer = setTimeout(() => {
+      this.saveTimer = undefined;
+      const book = this.session.book;
+      if (!book || !this.session.reading || Date.now() < this.remoteUntil) {
+        return;
+      }
+      void this.api.saveBookProgress(book, this.session.chapters, this.session.index, this.currentPos);
+    }, SAVE_DELAY_MS);
+  }
+
+  private onInlinePosition(pos: number): void {
+    this.markLocalInput();
+    this.currentPos = pos;
+    this.scheduleSave();
+  }
+
+  /**
+   * 其他端（网页、手机、另一个 IDE）保存了进度：正在读同一本书时跟着翻章、滚动；
+   * 不在读这本书时只更新书架上显示的进度
+   */
+  private log(msg: string): void {
+    this.output.appendLine(`[${new Date().toLocaleTimeString()}] 进度同步：${msg}`);
+  }
+
+  private onRemoteProgress(e: ProgressEvent): void {
+    this.log(`收到其他端的进度：书 ${e.bookId}，第 ${e.index} 章（${e.title ?? ""}），位置 ${e.pos}`);
+    const shelfBook = this.session.bookshelf.find((b) => b.id === e.bookId);
+    if (shelfBook) {
+      shelfBook.durChapterIndex = e.index;
+      shelfBook.durChapterPos = e.pos;
+      if (e.title) {
+        shelfBook.durChapterTitle = e.title;
+      }
+    }
+    const book = this.session.book;
+    if (!this.session.reading || !book || book.id !== e.bookId) {
+      this.log(this.session.reading && book ? `正在读的是另一本书（${book.id}），只更新书架` : "没有在阅读，只更新书架");
+      if (!this.session.reading && shelfBook) {
+        this.postState();
+      }
+      return;
+    }
+    if (Date.now() - this.lastLocalInput < LOCAL_ACTIVE_MS) {
+      this.log("本端 3 秒内有操作，不跟随");
+      return;
+    }
+    const chapters = this.session.chapters;
+    let target = chapters.findIndex((c) => c.index === e.index);
+    if (target < 0) {
+      // 进度停在卷名上：取它后面的第一章
+      target = chapters.findIndex((c) => c.index > e.index);
+    }
+    if (target < 0) {
+      this.log("目录里找不到这一章，请刷新目录");
+      return;
+    }
+    if (target === this.session.index && Math.abs(e.pos - this.currentPos) < 30) {
+      return;
+    }
+    this.log(target === this.session.index ? "跟随：同一章内滚动" : `跟随：切换到 ${chapters[target].title}`);
+    this.remoteUntil = Date.now() + LOCAL_ACTIVE_MS;
+    if (this.saveTimer) {
+      clearTimeout(this.saveTimer);
+      this.saveTimer = undefined;
+    }
+    book.durChapterIndex = e.index;
+    book.durChapterPos = e.pos;
+    if (target === this.session.index) {
+      this.currentPos = e.pos;
+      this.inline.applyPosition(e.pos);
+      void this.view?.webview.postMessage({ type: "scroll", ratio: e.pos / 10000 });
+      this.chapterPanel.scrollTo(e.pos / 10000);
+      return;
+    }
+    this.session.index = target;
+    this.inline.resetToFirstChunk();
+    void this.loadCurrentChapter(e.pos, false);
   }
 
   private async onMessage(msg: { type: string; [k: string]: unknown }): Promise<void> {
@@ -255,6 +453,7 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider, vscode.Di
             break;
           }
           if (target >= 0 && target < this.session.chapters.length) {
+            this.markLocalInput();
             this.session.index = target;
             await this.switchChapter(0);
           }
@@ -271,6 +470,7 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider, vscode.Di
       case "scroll":
         if (Number(msg.index) === this.session.index) {
           this.contentScrollTop = Math.max(0, Number(msg.scrollTop) || 0);
+          this.onBodyScrolled(Number(msg.index), Number(msg.ratio) || 0, msg.user === true);
         }
         await this.maybePreloadFromScroll(Number(msg.progress) || 0);
         break;
@@ -282,6 +482,9 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider, vscode.Di
         break;
       case "openInEditor":
         this.openInEditor();
+        break;
+      case "closePanel":
+        this.chapterPanel.close();
         break;
       default:
         break;
@@ -362,7 +565,19 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider, vscode.Di
       fontSize: font.size,
       loading: this.session.loading,
       error: this.session.error,
+      chapterTitles: this.session.chapters.map((c, i) => c.title || `第${i + 1}章`),
+      layout: this.layout,
     };
+  }
+
+  /** 选了目录里的一章（侧栏或编辑器面板的章节下拉框） */
+  private async selectChapter(target: number): Promise<void> {
+    if (target === this.session.index || target < 0 || target >= this.session.chapters.length) {
+      return;
+    }
+    this.markLocalInput();
+    this.session.index = target;
+    await this.switchChapter(0);
   }
 
   private postState(extra: Record<string, unknown> = {}): void {
@@ -371,7 +586,10 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider, vscode.Di
     }
     const font = getBodyFont();
     const chapter = this.session.currentChapter();
-    this.chapterPanel.sync(this.editorState());
+    this.chapterPanel.sync({
+      ...this.editorState(),
+      ...(typeof extra.scrollRatio === "number" ? { scrollRatio: extra.scrollRatio } : {}),
+    });
     void this.syncReadingContext();
     void this.view?.webview.postMessage({
       type: "state",
@@ -383,6 +601,7 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider, vscode.Di
         source: b.originName,
         author: b.author,
       })),
+      panelOpen: this.chapterPanel.isOpen,
       bookName: this.session.book?.name || "",
       chapterTitle: chapter?.title || "",
       body: this.session.body,

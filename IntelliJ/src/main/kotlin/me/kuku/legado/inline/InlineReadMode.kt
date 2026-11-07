@@ -3,7 +3,6 @@ package me.kuku.legado.inline
 import com.intellij.codeInsight.TargetElementUtil
 import com.intellij.ide.util.PropertiesComponent
 import com.intellij.openapi.application.ApplicationManager
-import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.editor.EditorCustomElementRenderer
 import com.intellij.openapi.editor.EditorFactory
@@ -19,13 +18,13 @@ import com.intellij.openapi.editor.ex.EditorEx
 import com.intellij.openapi.editor.ex.EditorPopupHandler
 import com.intellij.openapi.editor.markup.TextAttributes
 import com.intellij.openapi.fileEditor.FileDocumentManager
+import com.intellij.openapi.util.Computable
 import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.util.Key
 import com.intellij.psi.PsiDocumentManager
 import com.intellij.ui.JBColor
 import com.intellij.util.ui.UIUtil
 import me.kuku.legado.api.ApiUtils
-import me.kuku.legado.dao.CurrentReadData
 import me.kuku.legado.state.SettingsService
 import me.kuku.legado.toolwindow.IndexUI
 import java.awt.Font
@@ -52,6 +51,9 @@ import javax.swing.SwingUtilities
  *   否则开关行内阅读
  *
  * 接近章末时会预加载下一章正文到 ApiUtils 缓存。
+ *
+ * 每个项目有自己的阅读窗口（[IndexUI]）：显示的是编辑器所在项目正在读的章节，
+ * 换到另一个项目的编辑器里使用时，改为显示那个项目的阅读进度。
  */
 object InlineReadMode {
 
@@ -95,6 +97,41 @@ object InlineReadMode {
     private val parentDisposable = Disposer.newDisposable("legado-inline-read")
     private var listenerInstalled = false
     private val POPUP_HANDLER_KEY = Key.create<EditorPopupHandler>("me.kuku.legado.inline.popupHandler")
+
+    /** 正在显示其正文的阅读窗口（编辑器所在项目的；没有时用最近使用的） */
+    private var reader: IndexUI? = null
+
+    /** 用户在 editor 里操作：切换到该编辑器所在项目的阅读窗口，换了项目时按那边的章内位置定位到对应段 */
+    private fun useReaderOf(editor: Editor) {
+        val ui = editor.project?.let { IndexUI.getInstance(it) } ?: reader ?: IndexUI.instances().firstOrNull()
+        if (ui == null || ui === reader) return
+        reader = ui
+        pendingJumpToLastChunk = false
+        pendingShowAfterLoad = false
+        preloadedNextKey = null
+        val text = plainBody()
+        chunkIndex = if (text.isEmpty()) 0 else chunkForPosition(text, ui.currentPos)
+    }
+
+    /** 行内阅读正在显示 ui 的正文（阅读统计用） */
+    @JvmStatic
+    fun isShowingFor(ui: IndexUI): Boolean = enabled && reader === ui && activeInlay?.isValid == true
+
+    /** 某个项目的阅读窗口关闭了 */
+    @JvmStatic
+    fun readerClosed(ui: IndexUI) {
+        if (reader === ui) {
+            reader = null
+            pendingShowAfterLoad = false
+            clearInlay()
+        }
+    }
+
+    /** 来自阅读窗口 ui 的通知只在它就是当前阅读窗口（或还没有）时处理 */
+    private fun accepts(ui: IndexUI): Boolean {
+        if (reader == null) reader = ui
+        return reader === ui
+    }
 
     /** 当前显示的 inlay */
     private var activeInlay: Inlay<*>? = null
@@ -145,6 +182,7 @@ object InlineReadMode {
 
             val plain = !me.isControlDown && !me.isMetaDown && !me.isAltDown && !me.isShiftDown
             if (!plain) return
+            useReaderOf(editor)
 
             // 右键：显示行 → 上一段；其它行 / 未显示 → 换位显示（与左键换行相同）
             if (SwingUtilities.isRightMouseButton(me)) {
@@ -203,6 +241,7 @@ object InlineReadMode {
 
             val plainClick = !me.isControlDown && !me.isMetaDown && !me.isAltDown && !me.isShiftDown
             if (!plainClick) return
+            useReaderOf(editor)
 
             // 同行已在 pressed 跳段；这里只处理「首次显示 / 换行换位置」
             if (isShowingOn(editor) && isClickOnLastShowLine(editor, me)) return
@@ -346,6 +385,7 @@ object InlineReadMode {
         me.consume()
         val on = toggle()
         if (on) {
+            useReaderOf(editor)
             // 打开后若有正文，在当前光标旁显示当前段
             if (plainBody().isNotBlank()) {
                 showCurrent(editor)
@@ -369,16 +409,17 @@ object InlineReadMode {
     private fun hasIdeNavigationTarget(editor: Editor, offset: Int): Boolean {
         val project = editor.project ?: return false
         return try {
-            ReadAction.compute<Boolean, RuntimeException> {
+            // Application.runReadAction：ReadAction.compute 在新版平台中已弃用，替代方法在 2025.2 里还没有
+            ApplicationManager.getApplication().runReadAction(Computable<Boolean> {
                 PsiDocumentManager.getInstance(project).getPsiFile(editor.document)
-                    ?: return@compute false
+                    ?: return@Computable false
 
                 // flags 兼容不同平台版本：优先反射 getAllAccepted / REFERENCED_ELEMENT_ACCEPTED
                 val flags = resolveTargetFlags()
                 val util = TargetElementUtil.getInstance()
                 val target = util.findTargetElement(editor, flags, offset)
                 if (target != null) {
-                    return@compute true
+                    return@Computable true
                 }
                 val ref = try {
                     TargetElementUtil.findReference(editor, offset)
@@ -387,14 +428,14 @@ object InlineReadMode {
                 }
                 if (ref != null) {
                     try {
-                        if (ref.resolve() != null) return@compute true
+                        if (ref.resolve() != null) return@Computable true
                     } catch (_: Exception) {
                         // 有引用但解析异常，仍视为可能可跳转，避免抢键
-                        return@compute true
+                        return@Computable true
                     }
                 }
                 false
-            }
+            })
         } catch (_: Throwable) {
             // 探测失败：保守起见不抢（让 IDE 自己决定）
             true
@@ -454,14 +495,42 @@ object InlineReadMode {
     }
 
     @JvmStatic
-    fun resetToFirstChunk() {
+    fun resetToFirstChunk(ui: IndexUI) {
+        if (!accepts(ui)) return
         if (!pendingJumpToLastChunk) {
             chunkIndex = 0
         }
     }
 
+    /** 翻段后通知阅读窗口保存章内位置：当前段的开头在本章中的位置（0~10000） */
+    private fun notifyPosition(text: String = plainBody()) {
+        if (text.isEmpty()) return
+        val ui = reader ?: return
+        val max = maxChunkIndex(text)
+        ui.onInlinePosition(Math.round(chunkIndex * 10000.0 / (max + 1)).toInt())
+    }
+
+    private fun chunkForPosition(text: String, pos: Int): Int {
+        val max = maxChunkIndex(text)
+        return Math.floor(pos / 10000.0 * (max + 1) + 0.01).toInt().coerceIn(0, max)
+    }
+
+    /** 跟随其他端：同一章内跳到 pos（0~10000）对应的段 */
     @JvmStatic
-    fun afterBodyLoaded() {
+    fun applyPosition(ui: IndexUI, pos: Int) {
+        if (!accepts(ui)) return
+        val text = plainBody()
+        if (text.isEmpty()) return
+        chunkIndex = chunkForPosition(text, pos)
+        if (!enabled) return
+        val editor = activeEditor?.takeUnless { it.isDisposed } ?: return
+        if (isShowingOn(editor)) showCurrent(editor)
+    }
+
+    /** 正文加载完成；pos 为要定位到的章内位置（0~10000，打开书或跟随其他端时） */
+    @JvmStatic
+    fun afterBodyLoaded(ui: IndexUI, pos: Int) {
+        if (!accepts(ui)) return
         val text = plainBody()
         if (text.isEmpty()) {
             chunkIndex = 0
@@ -472,6 +541,9 @@ object InlineReadMode {
         if (pendingJumpToLastChunk) {
             pendingJumpToLastChunk = false
             chunkIndex = maxChunkIndex(text)
+            notifyPosition(text)
+        } else if (pos > 0) {
+            chunkIndex = chunkForPosition(text, pos)
         } else {
             chunkIndex = chunkIndex.coerceIn(0, maxChunkIndex(text))
         }
@@ -522,7 +594,7 @@ object InlineReadMode {
     }
 
     private fun plainBody(): String {
-        return CurrentReadData.bodyContent
+        return (reader?.bodyContent ?: "")
             .replace("\r\n", "\n")
             .replace('\r', '\n')
             .trim()
@@ -557,17 +629,19 @@ object InlineReadMode {
         if (chunkIndex < max) {
             chunkIndex++
             maybePreloadNextChapter(max)
+            notifyPosition(text)
             return false
         }
         // 本章读完 → 下一章第一段（body 异步加载，先标记 pending）
-        val chapters = CurrentReadData.bookChapterList
-        val idx = CurrentReadData.bookIndex
+        val ui = reader ?: return false
+        val chapters = ui.bookChapterList
+        val idx = ui.bookIndex
         if (idx >= 0 && idx + 1 < chapters.size) {
-            CurrentReadData.indexAtomicIncrement()
+            ui.setBookIndex(idx + 1)
             chunkIndex = 0
             pendingShowAfterLoad = true
             ApplicationManager.getApplication().invokeLater {
-                IndexUI.getInstance().switchChapter(0)
+                ui.switchChapter(0)
             }
             return true
         }
@@ -584,17 +658,19 @@ object InlineReadMode {
         if (text.isEmpty()) return false
         if (chunkIndex > 0) {
             chunkIndex--
+            notifyPosition(text)
             return false
         }
         // 本章第一段 → 上一章最后一段
-        val chapters = CurrentReadData.bookChapterList
-        val idx = CurrentReadData.bookIndex
+        val ui = reader ?: return false
+        val chapters = ui.bookChapterList
+        val idx = ui.bookIndex
         if (idx > 0 && idx < chapters.size) {
-            CurrentReadData.indexAtomicDecrement()
+            ui.setBookIndex(idx - 1)
             pendingJumpToLastChunk = true
             pendingShowAfterLoad = true
             ApplicationManager.getApplication().invokeLater {
-                IndexUI.getInstance().switchChapter(0)
+                ui.switchChapter(0)
             }
             return true
         }
@@ -610,9 +686,10 @@ object InlineReadMode {
         val remaining = maxChunk - chunkIndex
         if (remaining > PRELOAD_REMAINING_CHUNKS) return
 
-        val book = CurrentReadData.book
-        val nextIndex = CurrentReadData.bookIndex + 1
-        val chapters = CurrentReadData.bookChapterList
+        val ui = reader ?: return
+        val book = ui.book
+        val nextIndex = ui.bookIndex + 1
+        val chapters = ui.bookChapterList
         if (nextIndex < 0 || nextIndex >= chapters.size) return
 
         val key = "${book.id}:$nextIndex"
@@ -621,7 +698,7 @@ object InlineReadMode {
 
         ApplicationManager.getApplication().executeOnPooledThread {
             try {
-                ApiUtils.getBookContent(book, nextIndex)
+                ApiUtils.getBookContent(book, chapters, nextIndex)
             } catch (_: Exception) {
                 // 预加载失败不打扰阅读；允许下次再试
                 if (preloadedNextKey == key) {

@@ -1,13 +1,15 @@
 import * as vscode from "vscode";
 import { ApiClient } from "./api";
 import {
+  chunkAtPosition,
+  chunkText,
   clampChunkSize,
-  formatChunkLabel,
   maxChunkIndex,
   plainBody,
+  positionOfChunk,
   PRELOAD_REMAINING_CHUNKS,
 } from "./chunk";
-import { getChunkSize, getInlineReadFontSize } from "./config";
+import { getChunkSize, getInlineReadFontSize, getInlineReadOptions } from "./config";
 import { ReadSession } from "./session";
 
 export class InlineReadController implements vscode.Disposable {
@@ -25,6 +27,8 @@ export class InlineReadController implements vscode.Disposable {
   /** 刚用快捷键打开时，忽略同一次点击带来的编辑器焦点抖动。 */
   private stickShown = false;
   private stickTimer: ReturnType<typeof setTimeout> | undefined;
+  /** 用户翻段后通知阅读视图保存章内位置（0~10000） */
+  onUserPosition: ((pos: number) => void) | undefined;
 
   constructor(
     private readonly context: vscode.ExtensionContext,
@@ -41,10 +45,24 @@ export class InlineReadController implements vscode.Disposable {
       this.status,
       vscode.window.onDidChangeTextEditorSelection((e) => this.onSelection(e)),
       vscode.window.onDidChangeActiveTextEditor(() => this.onActiveEditorChanged()),
+      // 一编辑代码就隐藏（老板键）：下次单击再显示
+      vscode.workspace.onDidChangeTextDocument((e) => {
+        if (
+          e.contentChanges.length &&
+          this.shownDocument === e.document.uri.toString() &&
+          getInlineReadOptions().hideOnType
+        ) {
+          this.shownDocument = undefined;
+          this.stickShown = false;
+          this.clear();
+        }
+      }),
       vscode.workspace.onDidChangeConfiguration((e) => {
         if (
           e.affectsConfiguration("legado.inlineReadFontSize") ||
           e.affectsConfiguration("legado.inlineReadChunkSize") ||
+          e.affectsConfiguration("legado.inlineReadStyle") ||
+          e.affectsConfiguration("legado.inlineReadColor") ||
           e.affectsConfiguration("editor.fontSize") ||
           e.affectsConfiguration("editor.fontFamily")
         ) {
@@ -67,6 +85,11 @@ export class InlineReadController implements vscode.Disposable {
 
   get enabled(): boolean {
     return this.enabledInternal;
+  }
+
+  /** 正文正显示在某个编辑器里 */
+  get isShowing(): boolean {
+    return this.enabledInternal && !!this.shownDocument;
   }
 
   async setEnabled(value: boolean): Promise<void> {
@@ -103,7 +126,8 @@ export class InlineReadController implements vscode.Disposable {
     }
   }
 
-  afterBodyLoaded(): void {
+  /** 正文加载完成；pos 为要定位到的章内位置（0~10000，打开书或跟随其他端时） */
+  afterBodyLoaded(pos = 0): void {
     const text = plainBody(this.session.body);
     if (!text) {
       this.chunkIndex = 0;
@@ -115,6 +139,9 @@ export class InlineReadController implements vscode.Disposable {
     if (this.pendingJumpToLastChunk) {
       this.pendingJumpToLastChunk = false;
       this.chunkIndex = maxChunkIndex(text, this.chunkSize());
+      this.notifyPosition(text);
+    } else if (pos > 0) {
+      this.chunkIndex = this.chunkForPosition(text, pos);
     } else {
       this.chunkIndex = Math.min(Math.max(this.chunkIndex, 0), maxChunkIndex(text, this.chunkSize()));
     }
@@ -122,6 +149,29 @@ export class InlineReadController implements vscode.Disposable {
       this.pendingShowAfterLoad = false;
     }
     this.refresh();
+  }
+
+  /** 跟随其他端：同一章内跳到 pos（0~10000）对应的段 */
+  applyPosition(pos: number): void {
+    const text = plainBody(this.session.body);
+    if (!text) {
+      return;
+    }
+    this.chunkIndex = this.chunkForPosition(text, pos);
+    this.refresh();
+  }
+
+  /** 章内位置（0~10000，按字数比例）落在第几段 */
+  private chunkForPosition(text: string, pos: number): number {
+    return chunkAtPosition(text, pos, this.chunkSize());
+  }
+
+  /** 当前段的开头在本章中的位置（0~10000） */
+  private notifyPosition(text = plainBody(this.session.body)): void {
+    if (!text || !this.onUserPosition) {
+      return;
+    }
+    this.onUserPosition(positionOfChunk(text, this.chunkIndex, this.chunkSize()));
   }
 
   async nextChunk(): Promise<void> {
@@ -237,6 +287,7 @@ export class InlineReadController implements vscode.Disposable {
       if (this.chunkIndex < max) {
         this.chunkIndex++;
         this.maybePreload(max);
+        this.notifyPosition(text);
         return false;
       }
       if (this.session.index >= 0 && this.session.index + 1 < this.session.chapters.length) {
@@ -251,6 +302,7 @@ export class InlineReadController implements vscode.Disposable {
     }
     if (this.chunkIndex > 0) {
       this.chunkIndex--;
+      this.notifyPosition(text);
       return false;
     }
     if (this.session.index > 0 && this.session.index < this.session.chapters.length) {
@@ -296,7 +348,6 @@ export class InlineReadController implements vscode.Disposable {
       return;
     }
     this.lastEditor = editor;
-    const pos = editor.selection.active;
     let label = override;
     if (!label) {
       const text = plainBody(this.session.body);
@@ -305,21 +356,26 @@ export class InlineReadController implements vscode.Disposable {
       } else if (this.pendingShowAfterLoad) {
         label = "加载中…";
       } else {
-        label = formatChunkLabel(text, this.chunkIndex, this.chunkSize());
+        label = this.chunkLabel(text);
         this.maybePreload(maxChunkIndex(text, this.chunkSize()));
       }
     }
-    const range = new vscode.Range(pos, pos);
+    // 显示在当前行代码的末尾：不把光标后面的代码挤开，长行时也不会跑出屏幕
+    const line = editor.document.lineAt(editor.selection.active.line);
+    const end = line.range.end;
+    const options = getInlineReadOptions();
+    const comment = options.style === "comment";
     const fontSize = getInlineReadFontSize();
     editor.setDecorations(this.decoration, [
       {
-        range,
+        range: new vscode.Range(end, end),
         renderOptions: {
           after: {
-            contentText: ` ${label.replace(/\s+/g, " ")}`,
-            color: new vscode.ThemeColor("editorCodeLens.foreground"),
-            margin: "0 0 0 0.6em",
-            fontStyle: "normal",
+            contentText: `${comment ? commentPrefix(editor.document.languageId) : ""}${label.replace(/\s+/g, " ")}`,
+            color: options.color || new vscode.ThemeColor("editorCodeLens.foreground"),
+            // 行尾有代码时空出两格，像行尾注释
+            margin: line.isEmptyOrWhitespace ? "0" : "0 0 0 2ch",
+            fontStyle: comment ? "italic" : "normal",
             fontWeight: "normal",
             // VS Code 装饰器没有字号字段，用 textDecoration 注入，避免再套一层背景框
             textDecoration: inlineTextStyle(fontSize),
@@ -327,6 +383,21 @@ export class InlineReadController implements vscode.Disposable {
         },
       },
     ]);
+  }
+
+  /** 当前段的文字：第一段前带章节名，最后一段后提示下一章，末尾是 第几段/共几段 */
+  private chunkLabel(text: string): string {
+    const size = this.chunkSize();
+    const chunk = chunkText(text, this.chunkIndex, size);
+    if (!chunk.trim()) {
+      return "（无内容）";
+    }
+    const max = maxChunkIndex(text, size);
+    const title = this.session.currentChapter()?.title;
+    const head = this.chunkIndex === 0 && title ? `【${title}】` : "";
+    const hasNext = this.session.index + 1 < this.session.chapters.length;
+    const tail = this.chunkIndex >= max ? (hasNext ? " →下一章" : " （全书完）") : "";
+    return `${head}${chunk}${tail} ·${this.chunkIndex + 1}/${max + 1}`;
   }
 
   private clear(): void {
@@ -350,6 +421,35 @@ export class InlineReadController implements vscode.Disposable {
     this.status.tooltip = "行内阅读：Ctrl+Alt+I 开关，左键显示；Ctrl+Alt+] 下一页，Ctrl+Alt+[ 上一页";
     this.status.show();
   }
+}
+
+/** 伪装成注释时用的注释符号（按文件的语言） */
+function commentPrefix(languageId: string): string {
+  if (["python", "shellscript", "ruby", "yaml", "perl", "r", "powershell", "dockerfile", "makefile", "toml", "properties", "coffeescript", "elixir", "julia", "nim", "graphql"].includes(languageId)) {
+    return "# ";
+  }
+  if (["sql", "lua", "haskell", "elm", "ada"].includes(languageId)) {
+    return "-- ";
+  }
+  if (["bat"].includes(languageId)) {
+    return "REM ";
+  }
+  if (["vb"].includes(languageId)) {
+    return "' ";
+  }
+  if (["erlang", "latex", "tex", "matlab"].includes(languageId)) {
+    return "% ";
+  }
+  if (["clojure", "lisp", "scheme", "racket", "ini"].includes(languageId)) {
+    return "; ";
+  }
+  if (["html", "xml", "markdown", "vue-html", "svg"].includes(languageId)) {
+    return "<!-- ";
+  }
+  if (["css"].includes(languageId)) {
+    return "/* ";
+  }
+  return "// ";
 }
 
 /** 装饰器没有字号接口，借 textDecoration 把样式写进同一条 CSS。 */

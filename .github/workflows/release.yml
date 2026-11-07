@@ -1,5 +1,10 @@
 name: Release
 
+# 每次推送：构建、测试，并更新 latest Release（测试版下载）。
+# 插件市场只在版本号变化时发布：某个插件的版本还没有对应的标签（vscode-v1.1.0、intellij-v1.1.0）时，
+# 发布到它的市场并打上标签；版本号没变的推送跳过市场发布。发新版只需改版本号：
+#   - VS Code：vscode/package.json 的 version
+#   - IntelliJ：IntelliJ/build.gradle.kts 的 version
 on:
   push:
     branches: [master, main]
@@ -8,9 +13,10 @@ on:
 permissions:
   contents: write
 
+# 不取消正在进行的发布：发布到一半被取消，市场上已有这个版本但还没打标签，下次会重复发布而失败
 concurrency:
   group: release-latest
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   build-and-release:
@@ -43,7 +49,6 @@ jobs:
             unsigned=$(find build/distributions -maxdepth 1 -name '*.zip' ! -name '*-signed.zip' -print -quit)
             if [ -n "${signed}" ] && [ -n "${unsigned}" ]; then
               cp "${signed}" "${unsigned}"
-              rm -f "${signed}"
             fi
           fi
 
@@ -61,18 +66,7 @@ jobs:
           npm test
           npm run package
 
-      - name: Publish VS Code extension
-        working-directory: vscode
-        env:
-          VSCE_PAT: ${{ secrets.VSCE_PAT }}
-        run: |
-          if [ -z "${VSCE_PAT}" ]; then
-            echo "VSCE_PAT is not set, skip Marketplace publish"
-            exit 0
-          fi
-          npx --yes @vscode/vsce publish
-
-      - name: Resolve artifacts
+      - name: Resolve artifacts and versions
         id: artifact
         run: |
           VERSION=$(cd IntelliJ && ./gradlew properties -q | sed -n 's/^version: //p' | head -n1)
@@ -84,21 +78,30 @@ jobs:
             ZIP_PATH=$(find IntelliJ/build/distributions -maxdepth 1 -name '*.zip' -print -quit)
           fi
           ZIP_NAME=$(basename "$ZIP_PATH")
+          VSCODE_VERSION=$(node -p "require('./vscode/package.json').version")
           VSIX_NAME=$(node -p "require('./vscode/package.json').name + '-' + require('./vscode/package.json').version + '.vsix'")
           VSIX_PATH="vscode/${VSIX_NAME}"
           if [ ! -f "$VSIX_PATH" ]; then
             echo "Missing VSIX: $VSIX_PATH" >&2
             exit 1
           fi
+          # 版本号已经有标签（发布过）就不再发布到市场
+          has_tag() { [ -n "$(git ls-remote --tags origin "refs/tags/$1")" ]; }
+          if has_tag "intellij-v${VERSION}"; then NEW_INTELLIJ=false; else NEW_INTELLIJ=true; fi
+          if has_tag "vscode-v${VSCODE_VERSION}"; then NEW_VSCODE=false; else NEW_VSCODE=true; fi
           {
             echo "version=$VERSION"
+            echo "vscode_version=$VSCODE_VERSION"
             echo "zip_path=$ZIP_PATH"
             echo "zip_name=$ZIP_NAME"
             echo "vsix_path=$VSIX_PATH"
             echo "vsix_name=$VSIX_NAME"
+            echo "new_intellij=$NEW_INTELLIJ"
+            echo "new_vscode=$NEW_VSCODE"
           } >> "$GITHUB_OUTPUT"
-          echo "Resolved version=$VERSION zip=$ZIP_PATH vsix=$VSIX_PATH"
+          echo "IntelliJ ${VERSION}（新版本：${NEW_INTELLIJ}），VS Code ${VSCODE_VERSION}（新版本：${NEW_VSCODE}）"
 
+      # 先更新 latest Release：市场发布失败（如令牌过期）也不影响测试版下载
       - name: Publish latest release (overwrite)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -137,3 +140,38 @@ jobs:
             --title "$TITLE" \
             --notes "$NOTES" \
             --latest
+
+      - name: Publish VS Code extension (new version only)
+        if: steps.artifact.outputs.new_vscode == 'true'
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+          VSIX_PATH: ${{ steps.artifact.outputs.vsix_path }}
+          TAG: vscode-v${{ steps.artifact.outputs.vscode_version }}
+        run: |
+          if [ -z "${VSCE_PAT}" ]; then
+            echo "VSCE_PAT 没有设置，跳过 VS Code 插件市场发布（不打标签，设置后下次推送再发布）"
+            exit 0
+          fi
+          # 发布刚才构建并测试过的 vsix
+          npx --yes @vscode/vsce publish --packagePath "${VSIX_PATH}"
+          git tag "${TAG}" "${GITHUB_SHA}"
+          git push origin "refs/tags/${TAG}"
+
+      - name: Publish IntelliJ plugin (new version only)
+        if: steps.artifact.outputs.new_intellij == 'true'
+        working-directory: IntelliJ
+        env:
+          PUBLISH_TOKEN: ${{ secrets.PUBLISH_TOKEN }}
+          CERTIFICATE_CHAIN: ${{ secrets.CERTIFICATE_CHAIN }}
+          PRIVATE_KEY: ${{ secrets.PRIVATE_KEY }}
+          PRIVATE_KEY_PASSWORD: ${{ secrets.PRIVATE_KEY_PASSWORD }}
+          TAG: intellij-v${{ steps.artifact.outputs.version }}
+        run: |
+          if [ -z "${PUBLISH_TOKEN}" ]; then
+            echo "PUBLISH_TOKEN 没有设置，跳过 JetBrains Marketplace 发布（不打标签，设置后下次推送再发布）"
+            exit 0
+          fi
+          # Marketplace 只接受签过名的插件；首个版本需要先在 Marketplace 网页上手动上传
+          ./gradlew publishPlugin --no-daemon --stacktrace
+          git tag "${TAG}" "${GITHUB_SHA}"
+          git push origin "refs/tags/${TAG}"

@@ -5,7 +5,6 @@ import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.Toggleable
 import com.intellij.openapi.util.IconLoader
-import me.kuku.legado.toolwindow.IndexUI
 
 /**
  * 工具窗口标题栏按钮：显示/隐藏下方图标工具栏（书架刷新、返回/上下章等）。
@@ -17,13 +16,13 @@ class ToggleActionBarAction : AnAction(
 ), Toggleable {
 
     override fun actionPerformed(e: AnActionEvent) {
-        val ui = IndexUI.getInstance()
+        val ui = e.reader() ?: return
         ui.toggleActionBars()
         updatePresentation(e, ui.isActionBarsVisible)
     }
 
     override fun update(e: AnActionEvent) {
-        updatePresentation(e, IndexUI.getInstance().isActionBarsVisible)
+        updatePresentation(e, e.reader()?.isActionBarsVisible ?: true)
         e.presentation.isEnabled = true
     }
 

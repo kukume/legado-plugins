@@ -20,16 +20,21 @@ import java.util.concurrent.TimeUnit
  * 书架：GET /openapi/v1/shelf
  * 目录：GET /openapi/v1/books/{id}
  * 正文：GET /openapi/v1/books/{id}/content?index=&saveProgress=false
- * 进度：PUT /openapi/v1/books/{id}/progress  body={index, title}
+ * 进度：PUT /openapi/v1/books/{id}/progress  body={index, pos, title}
+ * 多端同步：GET /openapi/v1/events（见 [ProgressStream]）
  */
 object ApiUtils {
+
+    /** 本插件实例的 id（请求头 X-Client-Id）：服务器推送进度时跳过本端自己保存的 */
+    @JvmStatic
+    val clientId = "intellij-" + java.util.UUID.randomUUID()
 
     private const val PREFIX = "/openapi/v1"
 
     /** 正文缓存：预加载下一章后，切章可以直接显示 */
     private val bookCache = CacheBuilder.newBuilder()
         .maximumSize(20)
-        .expireAfterWrite(10, TimeUnit.MINUTES)
+        .expireAfterWrite(java.time.Duration.ofMinutes(10))
         .build<String, String>()
 
     private val mediaType = "application/json; charset=utf-8".toMediaType()
@@ -48,6 +53,7 @@ object ApiUtils {
                 val builder = chain.request().newBuilder()
                     .header("Accept", "application/json")
                     .header("X-API-Key", settingsState.apiKey.trim())
+                    .header("X-Client-Id", clientId)
                 chain.proceed(builder.build())
             }
             .build()
@@ -86,6 +92,23 @@ object ApiUtils {
         val url = (baseUrl() + PREFIX + path).toHttpUrl().newBuilder()
         query.forEach { (k, v) -> url.addQueryParameter(k, v) }
         return call(Request.Builder().url(url.build()).get().build())
+    }
+
+    private fun postJson(path: String, json: String): JsonNode {
+        ensureConfigured()
+        return call(Request.Builder().url(baseUrl() + PREFIX + path).post(json.toRequestBody(mediaType)).build())
+    }
+
+    /** 上报阅读时长、字数的增量（与网页的阅读统计合在一起）；失败时抛出异常，由调用方稍后重试 */
+    @JvmStatic
+    fun reportReading(day: String, bookId: Long, seconds: Int, chars: Int) {
+        val payload = objectMapper.createObjectNode().apply {
+            put("day", day)
+            put("bookId", bookId)
+            put("seconds", seconds)
+            put("chars", chars)
+        }
+        postJson("/stats/reading", objectMapper.writeValueAsString(payload))
     }
 
     private fun putJson(path: String, json: String): JsonNode {
@@ -130,6 +153,7 @@ object ApiUtils {
         json["book"]?.let { b ->
             b["durChapterIndex"]?.takeIf { !it.isNull }?.let { book.durChapterIndex = it.asInt() }
             b["durChapterTitle"]?.takeIf { !it.isNull }?.let { book.durChapterTitle = it.asString() }
+            b["durChapterPos"]?.takeIf { !it.isNull }?.let { book.durChapterPos = it.asInt() }
         }
         val chapters: List<BookChapterDTO> = objectMapper.readValue(
             objectMapper.writeValueAsString(json["chapters"]),
@@ -138,18 +162,11 @@ object ApiUtils {
         return chapters.filter { it.volume != true && it.index != null }
     }
 
-    /** 兼容旧签名：仅 bookUrl 无法拉目录，请使用 getChapterList(BookDTO) */
-    @JvmStatic
-    fun getChapterList(bookUrl: String): List<BookChapterDTO> {
-        error("请使用 getChapterList(BookDTO)，当前 bookUrl=$bookUrl")
-    }
-
     /**
-     * 正文（index 为目录列表下标）。不记录进度：预加载下一章时也会调用，进度由 [saveBookProgress] 单独保存
+     * 正文（index 为目录列表 chapters 的下标）。不记录进度：预加载下一章时也会调用，进度由 [saveBookProgress] 单独保存
      */
     @JvmStatic
-    fun getBookContent(book: BookDTO, index: Int): String {
-        val chapters = me.kuku.legado.dao.CurrentReadData.bookChapterList
+    fun getBookContent(book: BookDTO, chapters: List<BookChapterDTO>, index: Int): String {
         require(index in chapters.indices) { "章节下标越界: $index / ${chapters.size}" }
         val serverIndex = chapters[index].index ?: error("章节缺少序号")
         val id = requireId(book)
@@ -163,37 +180,31 @@ object ApiUtils {
         return text
     }
 
-    /** 兼容旧签名 */
+    /**
+     * 保存阅读进度（index 为目录列表下标，pos 为章内位置 0~10000）；失败不影响阅读。
+     * 同一账号在其他端读这本书时，会跟着跳到这里
+     */
     @JvmStatic
-    fun getBookContent(bookUrl: String, index: Int): String {
-        return getBookContent(me.kuku.legado.dao.CurrentReadData.book, index)
-    }
-
-    /** 保存阅读进度（index 为目录列表下标）；失败不影响阅读 */
-    @JvmStatic
-    fun saveBookProgress(book: BookDTO, index: Int) {
+    @JvmOverloads
+    fun saveBookProgress(book: BookDTO, chapters: List<BookChapterDTO>, index: Int, pos: Int = 0) {
         val id = book.id ?: return
-        val chapters = me.kuku.legado.dao.CurrentReadData.bookChapterList
         if (index !in chapters.indices) return
         val chapter = chapters[index]
         val serverIndex = chapter.index ?: return
+        val p = pos.coerceIn(0, 10000)
+        book.durChapterIndex = serverIndex
+        book.durChapterTitle = chapter.title
+        book.durChapterPos = p
         val payload = objectMapper.createObjectNode().apply {
             put("index", serverIndex)
+            put("pos", p)
             put("title", chapter.title.orEmpty())
         }
         try {
             putJson("/books/$id/progress", objectMapper.writeValueAsString(payload))
-            book.durChapterIndex = serverIndex
-            book.durChapterTitle = chapter.title
         } catch (_: Exception) {
             // 进度同步失败不影响阅读
         }
-    }
-
-    /** 兼容旧签名 */
-    @JvmStatic
-    fun saveBookProgress(bookUrl: String, index: Int) {
-        saveBookProgress(me.kuku.legado.dao.CurrentReadData.book, index)
     }
 
     /**

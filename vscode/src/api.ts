@@ -1,5 +1,6 @@
 import * as http from "http";
 import * as https from "https";
+import { randomUUID } from "crypto";
 import { URL } from "url";
 import { Book, BookChapter, ApiConfig } from "./types";
 import { textOf, toPlainText } from "./text";
@@ -17,9 +18,13 @@ interface CacheEntry {
  * 书架：GET /openapi/v1/shelf
  * 目录：GET /openapi/v1/books/{id}
  * 正文：GET /openapi/v1/books/{id}/content?index=&saveProgress=false
- * 进度：PUT /openapi/v1/books/{id}/progress  body={index, title}
+ * 进度：PUT /openapi/v1/books/{id}/progress  body={index, pos, title}
+ * 多端同步：GET /openapi/v1/events（见 events.ts）
  */
 export class ApiClient {
+  /** 本插件实例的 id（请求头 X-Client-Id）：服务器推送进度时跳过本端自己保存的 */
+  readonly clientId = `vscode-${randomUUID()}`;
+
   /** 正文缓存：预加载下一章后，切章可以直接显示 */
   private readonly cache = new Map<string, CacheEntry>();
   private readonly cacheTtlMs = 10 * 60 * 1000;
@@ -50,6 +55,7 @@ export class ApiClient {
     const headers: Record<string, string> = {
       Accept: "application/json",
       "X-API-Key": this.config().apiKey.trim(),
+      "X-Client-Id": this.clientId,
     };
     if (init.body) {
       headers["Content-Type"] = "application/json; charset=utf-8";
@@ -88,9 +94,24 @@ export class ApiClient {
       latestChapterTitle: textOf(o, "latestChapterTitle") || undefined,
       totalChapterNum: typeof o.totalChapterNum === "number" ? o.totalChapterNum : undefined,
       durChapterIndex: typeof o.durChapterIndex === "number" ? o.durChapterIndex : 0,
-      durChapterPos: 0,
+      durChapterPos: typeof o.durChapterPos === "number" ? o.durChapterPos : 0,
       durChapterTitle: textOf(o, "durChapterTitle") || undefined,
     };
+  }
+
+  /** 上报阅读时长、字数的增量（与网页的阅读统计合在一起） */
+  async reportReading(r: { day: string; bookId: number; seconds: number; chars: number }): Promise<void> {
+    await this.request("/stats/reading", { method: "POST", body: JSON.stringify(r) });
+  }
+
+  /** 网页“阅读设置”里的排版（字号、行高、段间距等）；服务器较旧没有这个接口时返回空对象 */
+  async getReaderConfig(): Promise<Record<string, unknown>> {
+    try {
+      const json = await this.request("/reader-config");
+      return json && typeof json === "object" ? (json as Record<string, unknown>) : {};
+    } catch {
+      return {};
+    }
   }
 
   /** 书架（只保留文字书：听书、视频、漫画不支持） */
@@ -110,6 +131,9 @@ export class ApiClient {
     if (json.book) {
       if (typeof json.book.durChapterIndex === "number") {
         book.durChapterIndex = json.book.durChapterIndex;
+      }
+      if (typeof json.book.durChapterPos === "number") {
+        book.durChapterPos = json.book.durChapterPos;
       }
       const title = textOf(json.book, "durChapterTitle");
       if (title) {
@@ -169,19 +193,24 @@ export class ApiClient {
     return text;
   }
 
-  /** 保存阅读进度（index 为目录列表下标）；失败不影响阅读 */
-  async saveBookProgress(book: Book, chapters: BookChapter[], index: number): Promise<void> {
+  /**
+   * 保存阅读进度（index 为目录列表下标，pos 为章内位置 0~10000）；失败不影响阅读。
+   * 同一账号在其他端读这本书时，会跟着跳到这里
+   */
+  async saveBookProgress(book: Book, chapters: BookChapter[], index: number, pos = 0): Promise<void> {
     if (index < 0 || index >= chapters.length) {
       return;
     }
     const chapter = chapters[index];
+    const p = Math.max(0, Math.min(10000, Math.round(pos)));
+    book.durChapterIndex = chapter.index;
+    book.durChapterTitle = chapter.title;
+    book.durChapterPos = p;
     try {
       await this.request(`/books/${book.id}/progress`, {
         method: "PUT",
-        body: JSON.stringify({ index: chapter.index, title: chapter.title }),
+        body: JSON.stringify({ index: chapter.index, pos: p, title: chapter.title }),
       });
-      book.durChapterIndex = chapter.index;
-      book.durChapterTitle = chapter.title;
     } catch {
       // 进度同步失败不影响阅读
     }

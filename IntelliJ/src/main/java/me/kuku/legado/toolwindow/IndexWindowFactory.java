@@ -29,7 +29,7 @@ public class IndexWindowFactory implements ToolWindowFactory {
         }
 
         ContentFactory contentFactory = ContentFactory.getInstance();
-        Content content = contentFactory.createContent(IndexUI.getInstance().getComponent(), "", false);
+        Content content = contentFactory.createContent(IndexUI.create(project, toolWindow).getComponent(), "", false);
         toolWindow.getContentManager().addContent(content);
     }
 }

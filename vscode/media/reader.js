@@ -26,12 +26,65 @@ let menuEl = null;
 let menuAnchor = null;
 let renderedContentKey = "";
 
+/** 最近一次用户操作（滚轮、按键、点击、触摸）：用来区分用户滚动和程序滚动（恢复位置、跟随其他端） */
+let lastInput = 0;
+for (const ev of ["wheel", "keydown", "pointerdown", "touchstart"]) {
+  window.addEventListener(
+    ev,
+    () => {
+      lastInput = Date.now();
+      if (cancelAnim) {
+        cancelAnim();
+      }
+    },
+    { capture: true, passive: true }
+  );
+}
+
+/**
+ * 滚动动画（先快后慢，约 0.45 秒）。不用 scrollTo 的 smooth：系统关闭了动画效果
+ * （prefers-reduced-motion，如 Windows 的“动画效果”）时会直接跳过去。用户自己滚动时停下
+ */
+let cancelAnim = null;
+function animateScroll(getTop, setTop, maxTop, target, duration = 450) {
+  if (cancelAnim) {
+    cancelAnim();
+  }
+  const from = getTop();
+  const to = Math.max(0, Math.min(target, maxTop()));
+  if (Math.abs(to - from) < 2) {
+    return;
+  }
+  const start = performance.now();
+  let timer = 0;
+  const step = () => {
+    const t = Math.min(1, (performance.now() - start) / duration);
+    setTop(from + (to - from) * (1 - Math.pow(1 - t, 3)));
+    if (t < 1) {
+      timer = setTimeout(step, 16);
+    } else {
+      cancelAnim = null;
+    }
+  };
+  cancelAnim = () => {
+    clearTimeout(timer);
+    cancelAnim = null;
+  };
+  step();
+}
+
+
 window.addEventListener("message", (event) => {
   const msg = event.data;
+  // 跟随其他端：同一章内滚动到对应位置
+  if (msg && msg.type === "scroll" && typeof msg.ratio === "number") {
+    applyRatio(msg.ratio, true);
+    return;
+  }
   if (!msg || msg.type !== "state") {
     return;
   }
-  const { type: _type, scrollTo, restoreScroll, ...rest } = msg;
+  const { type: _type, scrollTo, restoreScroll, scrollRatio, ...rest } = msg;
   state = { ...state, ...rest };
   // 宿主若漏发 loading，不能把上一次的 true 一直留下
   if (!Object.prototype.hasOwnProperty.call(rest, "loading")) {
@@ -39,8 +92,10 @@ window.addEventListener("message", (event) => {
   }
   const keepScroll = content.scrollTop;
   render();
-  if (typeof scrollTo === "number") {
-    applyScroll(0);
+  if (typeof scrollRatio === "number") {
+    applyRatio(scrollRatio, false);
+  } else if (typeof scrollTo === "number") {
+    applyScroll(scrollTo);
   } else if (typeof restoreScroll === "number") {
     applyScroll(restoreScroll);
   } else {
@@ -51,8 +106,27 @@ window.addEventListener("message", (event) => {
 content.addEventListener("scroll", () => {
   const max = content.scrollHeight - content.clientHeight;
   const progress = max > 0 ? content.scrollTop / max : 0;
-  vscode.postMessage({ type: "scroll", progress, scrollTop: content.scrollTop, index: state.index });
+  // 章内位置与网页版相同：视口顶部在整章内容中的比例
+  const ratio = content.scrollHeight > 0 ? content.scrollTop / content.scrollHeight : 0;
+  const user = Date.now() - lastInput < 1500;
+  vscode.postMessage({ type: "scroll", progress, ratio, user, scrollTop: content.scrollTop, index: state.index });
 });
+
+/** 滚动到章内位置（比例 0~1）；smooth：跟随其他端时滑动过去 */
+function applyRatio(ratio, smooth) {
+  const top = () => Math.max(0, ratio) * content.scrollHeight;
+  if (smooth) {
+    animateScroll(
+      () => content.scrollTop,
+      (v) => (content.scrollTop = v),
+      () => content.scrollHeight - content.clientHeight,
+      top()
+    );
+    return;
+  }
+  content.scrollTop = top();
+  requestAnimationFrame(() => (content.scrollTop = top()));
+}
 
 function applyScroll(top) {
   content.scrollTop = top;
@@ -99,6 +173,7 @@ function contentKey() {
     chapterTitle: state.chapterTitle,
     body: state.body,
     error: state.error,
+    panelOpen: !!state.panelOpen,
     fontColor: state.fontColor,
     fontSize: state.fontSize,
     bookshelf: state.bookshelf,
@@ -345,6 +420,20 @@ function renderContent() {
   const title = document.createElement("h2");
   title.textContent = state.chapterTitle || state.bookName;
   content.appendChild(title);
+  // 正文已在编辑器里打开：侧栏只留目录和按钮，不重复显示正文
+  if (state.panelOpen) {
+    const p = document.createElement("p");
+    p.className = "hint";
+    p.textContent = "正文已在编辑器中打开。";
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "link-btn";
+    b.textContent = "回到侧栏阅读";
+    b.addEventListener("click", () => vscode.postMessage({ type: "closePanel" }));
+    content.appendChild(p);
+    content.appendChild(b);
+    return;
+  }
   const pre = document.createElement("pre");
   pre.className = "body";
   if (state.fontColor) {
@@ -353,7 +442,8 @@ function renderContent() {
   if (state.fontSize > 0) {
     pre.style.fontSize = `${state.fontSize}px`;
   }
-  pre.textContent = state.body || (state.loading ? "加载中…" : "");
+  // 加载新章节期间显示“加载中…”，不先显示新章节名配旧章节正文
+  pre.textContent = state.loading ? "加载中…" : state.body || "";
   content.appendChild(pre);
 }
 

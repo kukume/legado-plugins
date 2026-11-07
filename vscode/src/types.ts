@@ -13,7 +13,7 @@ export interface Book {
   totalChapterNum?: number;
   /** 当前阅读章节序号（服务器目录中的序号，含卷名） */
   durChapterIndex: number;
-  /** 章节内阅读位置（本地使用） */
+  /** 章节内阅读位置（比例 0~10000：视口顶部在本章内容中的位置，与网页版相同） */
   durChapterPos: number;
   durChapterTitle?: string;
 }
