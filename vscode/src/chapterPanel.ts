@@ -49,7 +49,7 @@ export class ChapterPanel implements vscode.Disposable {
     private readonly context: vscode.ExtensionContext,
     private readonly onCommand: (type: "prevChapter" | "nextChapter") => void,
     /** 正文滚动（index 为目录列表下标，ratio 为章内位置 0~1，user 为是否用户自己滚动） */
-    private readonly onScroll: (index: number, ratio: number, user: boolean) => void = () => {},
+    private readonly onScroll: (index: number, ratio: number, user: boolean, progress: number) => void = () => {},
     /** 在章节下拉框里选了一章（目录列表下标） */
     private readonly onSelect: (index: number) => void = () => {},
     /** 面板打开或关闭（侧栏据此收起或恢复正文） */
@@ -86,14 +86,14 @@ export class ChapterPanel implements vscode.Disposable {
     this.sentTitlesKey = "";
     panel.webview.html = this.html(panel.webview);
     this.listeners.push(
-      panel.webview.onDidReceiveMessage((msg: { type?: string; index?: number; ratio?: number; user?: boolean }) => {
+      panel.webview.onDidReceiveMessage((msg: { type?: string; index?: number; ratio?: number; progress?: number; user?: boolean }) => {
         if (msg?.type === "ready" && this.latest) {
           this.sentTitlesKey = "";
           this.post(this.latest);
           return;
         }
         if (msg?.type === "scroll") {
-          this.onScroll(Number(msg.index), Number(msg.ratio) || 0, msg.user === true);
+          this.onScroll(Number(msg.index), Number(msg.ratio) || 0, msg.user === true, Number(msg.progress) || 0);
           return;
         }
         if (msg?.type === "selectChapter") {

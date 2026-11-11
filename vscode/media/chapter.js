@@ -94,7 +94,10 @@ function updateProgress() {
 
 window.addEventListener("scroll", () => {
   updateProgress();
-  vscode.postMessage({ type: "scroll", index: lastIndex, ratio: ratio(), user: Date.now() - lastInput < 1500 });
+  // progress：读到本章的多少（0~1），过半时预加载下一章
+  const max = document.documentElement.scrollHeight - window.innerHeight;
+  const progress = max > 0 ? Math.min(1, window.scrollY / max) : 1;
+  vscode.postMessage({ type: "scroll", index: lastIndex, ratio: ratio(), progress, user: Date.now() - lastInput < 1500 });
 });
 
 /** 排版：与网页的阅读设置相同；插件设置里单独填了字号、颜色时以插件设置为准 */

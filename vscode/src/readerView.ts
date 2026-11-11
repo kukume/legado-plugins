@@ -57,7 +57,10 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider, vscode.Di
           void this.nextChapter();
         }
       },
-      (index, ratio, user) => this.onBodyScrolled(index, ratio, user),
+      (index, ratio, user, progress) => {
+        this.onBodyScrolled(index, ratio, user);
+        void this.maybePreloadFromScroll(progress);
+      },
       (index) => void this.selectChapter(index),
       // 面板打开时侧栏只留目录和按钮，关闭后恢复显示正文
       () => this.postState()

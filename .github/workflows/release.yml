@@ -1,6 +1,7 @@
 name: Release
 
-# 每次推送：构建、测试，并更新 latest Release（测试版下载）。
+# 每次推送：构建、测试。latest Release（测试版下载）只在版本号变化时更新：
+# 这次构建的 zip / vsix（文件名带版本号）都已经在 latest Release 里时跳过上传；手动运行时总是上传。
 # 插件市场只在版本号变化时发布：某个插件的版本还没有对应的标签（vscode-v1.1.0、intellij-v1.1.0）时，
 # 发布到它的市场并打上标签；版本号没变的推送跳过市场发布。发新版只需改版本号：
 #   - VS Code：vscode/package.json 的 version
@@ -68,6 +69,8 @@ jobs:
 
       - name: Resolve artifacts and versions
         id: artifact
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           VERSION=$(cd IntelliJ && ./gradlew properties -q | sed -n 's/^version: //p' | head -n1)
           if [ -z "$VERSION" ]; then
@@ -99,10 +102,20 @@ jobs:
             echo "new_intellij=$NEW_INTELLIJ"
             echo "new_vscode=$NEW_VSCODE"
           } >> "$GITHUB_OUTPUT"
-          echo "IntelliJ ${VERSION}（新版本：${NEW_INTELLIJ}），VS Code ${VSCODE_VERSION}（新版本：${NEW_VSCODE}）"
+          # latest Release 里已经有这两个文件（版本号都没变）就不再上传；手动运行时总是上传
+          UPLOAD_RELEASE=true
+          if [ "${GITHUB_EVENT_NAME}" != "workflow_dispatch" ]; then
+            ASSETS=$(gh release view latest --repo "${GITHUB_REPOSITORY}" --json assets -q '.assets[].name' 2>/dev/null || true)
+            if grep -qxF "$ZIP_NAME" <<< "$ASSETS" && grep -qxF "$VSIX_NAME" <<< "$ASSETS"; then
+              UPLOAD_RELEASE=false
+            fi
+          fi
+          echo "upload_release=$UPLOAD_RELEASE" >> "$GITHUB_OUTPUT"
+          echo "IntelliJ ${VERSION}（新版本：${NEW_INTELLIJ}），VS Code ${VSCODE_VERSION}（新版本：${NEW_VSCODE}），更新 latest Release：${UPLOAD_RELEASE}"
 
       # 先更新 latest Release：市场发布失败（如令牌过期）也不影响测试版下载
-      - name: Publish latest release (overwrite)
+      - name: Publish latest release (overwrite, version changed only)
+        if: steps.artifact.outputs.upload_release == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ steps.artifact.outputs.version }}
