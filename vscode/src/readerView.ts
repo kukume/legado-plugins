@@ -75,6 +75,11 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider, vscode.Di
       this.stream.start();
     }
     this.inline.onUserPosition = (pos) => this.onInlinePosition(pos);
+    // 行内阅读开关或显示状态变了：侧栏据此切换“显示正文 / 只留提示”。
+    // 行内阅读收起时，侧栏要回到当前进度所在的位置，而不是停在旧滚动位置
+    this.inline.onDidChangeShowing = () => {
+      this.postState(this.inline.isShowing ? {} : { scrollRatio: this.currentPos / 10000 });
+    };
     // 正文正在显示（侧栏、编辑器面板或行内阅读）时才计阅读时间
     this.stats = new ReadingStatsReporter(api, () => {
       const book = this.session.book;
@@ -135,22 +140,14 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider, vscode.Di
       void this.onMessage(msg);
     });
     this.postState({ restoreScroll: this.contentScrollTop });
-    void this.syncReadingContext();
     if (!this.session.bookshelf.length && !this.session.reading && getConfigured()) {
       void this.refreshBookshelf();
     }
   }
 
-  reveal(): void {
-    if (this.view) {
-      this.view.show?.(true);
-    } else {
-      void vscode.commands.executeCommand("legado.reader.focus");
-    }
-  }
-
   async refreshBookshelf(): Promise<void> {
     this.session.reading = false;
+    this.inline.refresh();
     this.session.loading = true;
     this.session.error = "";
     this.postState();
@@ -169,8 +166,8 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider, vscode.Di
   }
 
   async backBookshelf(): Promise<void> {
-    this.session.reading = false;
-    this.postState();
+    // 行内阅读的开关状态由用户决定（存在 globalState 里），进出正文都不改变它；
+    // 但正文不能留在编辑器里，refreshBookshelf 会清掉行尾的正文
     await this.refreshBookshelf();
   }
 
@@ -234,19 +231,13 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider, vscode.Di
     await this.openBook(this.session.book);
   }
 
-  toggleActionBars(): void {
-    this.session.actionBarsVisible = !this.session.actionBarsVisible;
-    this.postState();
-  }
-
-  showBookInfo(): void {
-    const book = this.session.book;
-    const chapter = this.session.currentChapter();
-    if (!book || !chapter) {
-      void vscode.window.showInformationMessage("尚未打开书籍");
-      return;
+  /** 标题栏的刷新按钮：书架页刷新书架，正文页刷新文章 */
+  async refresh(): Promise<void> {
+    if (this.session.reading) {
+      await this.refreshTextBody();
+    } else {
+      await this.refreshBookshelf();
     }
-    void vscode.window.showInformationMessage(`${book.name} — ${chapter.title}`);
   }
 
   openInEditor(): void {
@@ -256,7 +247,8 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider, vscode.Di
       void vscode.window.showInformationMessage("尚未打开章节");
       return;
     }
-    this.chapterPanel.show(this.editorState());
+    // 带上当前章内位置：编辑器面板从侧栏读到的位置打开，而不是回到章首
+    this.chapterPanel.show({ ...this.editorState(), scrollRatio: this.currentPos / 10000 });
   }
 
   /**
@@ -425,9 +417,6 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider, vscode.Di
       case "ready":
         this.postState({ restoreScroll: this.contentScrollTop });
         break;
-      case "refreshBookshelf":
-        await this.refreshBookshelf();
-        break;
       case "openBook":
         {
           const i = Number(msg.index);
@@ -445,9 +434,6 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider, vscode.Di
         break;
       case "nextChapter":
         await this.nextChapter();
-        break;
-      case "refreshBody":
-        await this.refreshTextBody();
         break;
       case "selectChapter":
         {
@@ -480,14 +466,17 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider, vscode.Di
       case "openSettings":
         await vscode.commands.executeCommand("workbench.action.openSettings", "legado");
         break;
-      case "showBookInfo":
-        this.showBookInfo();
-        break;
       case "openInEditor":
         this.openInEditor();
         break;
       case "closePanel":
         this.chapterPanel.close();
+        break;
+      case "backToSidebar":
+        // 回到侧栏阅读：关掉行内阅读和编辑器面板，并跳到当前进度
+        await this.inline.setEnabled(false);
+        this.chapterPanel.close();
+        this.postState({ scrollRatio: this.currentPos / 10000 });
         break;
       default:
         break;
@@ -593,11 +582,9 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider, vscode.Di
       ...this.editorState(),
       ...(typeof extra.scrollRatio === "number" ? { scrollRatio: extra.scrollRatio } : {}),
     });
-    void this.syncReadingContext();
     void this.view?.webview.postMessage({
       type: "state",
       reading: this.session.reading,
-      actionBarsVisible: this.session.actionBarsVisible,
       bookshelf: this.session.bookshelf.map((b) => ({
         name: b.name,
         current: b.durChapterTitle || b.latestChapterTitle || "",
@@ -605,6 +592,7 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider, vscode.Di
         author: b.author,
       })),
       panelOpen: this.chapterPanel.isOpen,
+      inlineOpen: this.inline.isShowing,
       bookName: this.session.book?.name || "",
       chapterTitle: chapter?.title || "",
       body: this.session.body,
@@ -617,11 +605,6 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider, vscode.Di
       error: this.session.error,
       ...extra,
     });
-  }
-
-  /** 标题栏刷新：书架显示“刷新书架”，正文显示“刷新文章”。 */
-  private syncReadingContext(): Thenable<unknown> {
-    return vscode.commands.executeCommand("setContext", "legado.reading", this.session.reading);
   }
 
   private html(webview: vscode.Webview): string {

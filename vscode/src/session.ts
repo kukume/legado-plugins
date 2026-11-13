@@ -7,7 +7,6 @@ export class ReadSession {
   body = "";
   bookshelf: Book[] = [];
   reading = false;
-  actionBarsVisible = true;
   loading = false;
   error = "";
   chapterWindowStart = 0;

@@ -21,22 +21,16 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.window.registerWebviewViewProvider(ReaderViewProvider.viewId, reader, {
       webviewOptions: { retainContextWhenHidden: true },
     }),
-    vscode.commands.registerCommand("legado.refreshBookshelf", () => reader!.refreshBookshelf()),
-    vscode.commands.registerCommand("legado.backBookshelf", () => reader!.backBookshelf()),
-    vscode.commands.registerCommand("legado.previousChapter", () => reader!.previousChapter()),
-    vscode.commands.registerCommand("legado.nextChapter", () => reader!.nextChapter()),
-    vscode.commands.registerCommand("legado.refreshTextBody", () => reader!.refreshTextBody()),
-    vscode.commands.registerCommand("legado.showBookInfo", () => reader!.showBookInfo()),
-    vscode.commands.registerCommand("legado.toggleActionBar", () => reader!.toggleActionBars()),
+    // 只注册需要用户绑定快捷键的三个命令。其余按钮都在 webview 里，用消息驱动：
+    // 注册过的命令都会出现在“键盘快捷方式”列表里，哪怕没有默认绑定。
+    // 标题栏的刷新用 _ 前缀的私有 id：能显示图标，但 VS Code 会跳过它，不进快捷键列表。
+    vscode.commands.registerCommand("_legado.refresh", () => reader!.refresh()),
     vscode.commands.registerCommand("legado.toggleInlineRead", async () => {
       const on = await inline.toggle();
-      void vscode.window.showInformationMessage(on ? "已开启行内阅读。Ctrl+Alt+] 下一页，Ctrl+Alt+[ 上一页" : "已关闭行内阅读");
+      void vscode.window.showInformationMessage(on ? "已开启行内阅读" : "已关闭行内阅读");
     }),
     vscode.commands.registerCommand("legado.inlineNextChunk", () => inline.nextChunk()),
-    vscode.commands.registerCommand("legado.inlinePrevChunk", () => inline.previousChunk()),
-    vscode.commands.registerCommand("legado.openSettings", () =>
-      vscode.commands.executeCommand("workbench.action.openSettings", "legado")
-    )
+    vscode.commands.registerCommand("legado.inlinePrevChunk", () => inline.previousChunk())
   );
 
   void vscode.commands.executeCommand("setContext", "legado.inlineRead", inline.enabled);

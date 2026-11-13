@@ -23,12 +23,28 @@ export class InlineReadController implements vscode.Disposable {
   private readonly disposables: vscode.Disposable[] = [];
   private lastEditor: vscode.TextEditor | undefined;
   /** 只在这个文档里显示。切换文件后清空，等下一次鼠标左键。 */
-  private shownDocument: string | undefined;
+  private shownDocumentInternal: string | undefined;
+
+  /** 显示状态变化时通知宿主（侧栏据此决定是否显示正文） */
+  private get shownDocument(): string | undefined {
+    return this.shownDocumentInternal;
+  }
+
+  private set shownDocument(value: string | undefined) {
+    const changed = this.shownDocumentInternal !== value;
+    this.shownDocumentInternal = value;
+    if (changed) {
+      this.onDidChangeShowing?.();
+    }
+  }
+
   /** 刚用快捷键打开时，忽略同一次点击带来的编辑器焦点抖动。 */
   private stickShown = false;
   private stickTimer: ReturnType<typeof setTimeout> | undefined;
   /** 用户翻段后通知阅读视图保存章内位置（0~10000） */
   onUserPosition: ((pos: number) => void) | undefined;
+  /** 开关或显示状态变了：侧栏据此决定是否显示正文 */
+  onDidChangeShowing: (() => void) | undefined;
 
   constructor(
     private readonly context: vscode.ExtensionContext,
@@ -87,9 +103,9 @@ export class InlineReadController implements vscode.Disposable {
     return this.enabledInternal;
   }
 
-  /** 正文正显示在某个编辑器里 */
+  /** 正文正显示在某个编辑器里（没打开正文时一律不算） */
   get isShowing(): boolean {
-    return this.enabledInternal && !!this.shownDocument;
+    return this.enabledInternal && this.session.reading && !!this.shownDocument;
   }
 
   async setEnabled(value: boolean): Promise<void> {
@@ -111,6 +127,7 @@ export class InlineReadController implements vscode.Disposable {
       this.clear();
     }
     this.updateStatus();
+    this.onDidChangeShowing?.();
     await this.context.globalState.update("legado.inlineRead.enabled", value);
     await vscode.commands.executeCommand("setContext", "legado.inlineRead", value);
   }
@@ -342,8 +359,15 @@ export class InlineReadController implements vscode.Disposable {
 
   refresh(override?: string): void {
     this.updateStatus();
+    // 没在读正文（在书架页）时不留正文：返回书架后要立刻把行尾的正文清掉
     const editor = this.editorForShow();
-    if (!this.enabledInternal || !editor || !this.shownDocument || this.shownDocument !== this.documentKey(editor)) {
+    if (
+      !this.enabledInternal ||
+      !this.session.reading ||
+      !editor ||
+      !this.shownDocument ||
+      this.shownDocument !== this.documentKey(editor)
+    ) {
       this.clear();
       return;
     }
@@ -407,7 +431,8 @@ export class InlineReadController implements vscode.Disposable {
   }
 
   private updateStatus(): void {
-    if (!this.enabledInternal) {
+    // 没打开正文时不显示行内阅读状态（开关状态本身仍然保留）
+    if (!this.enabledInternal || !this.session.reading) {
       this.status.hide();
       return;
     }
@@ -418,7 +443,7 @@ export class InlineReadController implements vscode.Disposable {
       const max = maxChunkIndex(text, this.chunkSize());
       this.status.text = `$(book) 行内 ${this.chunkIndex + 1}/${max + 1}`;
     }
-    this.status.tooltip = "行内阅读：Ctrl+Alt+I 开关，左键显示；Ctrl+Alt+] 下一页，Ctrl+Alt+[ 上一页";
+    this.status.tooltip = "行内阅读：Ctrl+Alt+I 开关，左键显示；上一段 / 下一段默认不绑定快捷键，可在键盘快捷方式里自行绑定";
     this.status.show();
   }
 }

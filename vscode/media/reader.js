@@ -6,7 +6,6 @@ const content = document.getElementById("content");
 
 let state = {
   reading: false,
-  actionBarsVisible: true,
   bookshelf: [],
   bookName: "",
   chapterTitle: "",
@@ -174,6 +173,7 @@ function contentKey() {
     body: state.body,
     error: state.error,
     panelOpen: !!state.panelOpen,
+    inlineOpen: !!state.inlineOpen,
     fontColor: state.fontColor,
     fontSize: state.fontSize,
     bookshelf: state.bookshelf,
@@ -181,7 +181,7 @@ function contentKey() {
 }
 
 function renderToolbar() {
-  if (!state.reading || !state.actionBarsVisible) {
+  if (!state.reading) {
     chapterMenuSticky = null;
   }
   if (
@@ -190,8 +190,7 @@ function renderToolbar() {
     menuEl.isConnected &&
     menuAnchor &&
     menuAnchor.isConnected &&
-    state.reading &&
-    state.actionBarsVisible
+    state.reading
   ) {
     refillChapterMenu(menuEl);
     positionChapterMenu(menuAnchor, menuEl);
@@ -202,7 +201,8 @@ function renderToolbar() {
 
   closeChapterMenu();
   toolbar.innerHTML = "";
-  if (!state.actionBarsVisible || !state.reading) {
+  // 书架页没有工具栏按钮：整行隐藏，不占空间（刷新和设置在侧栏标题栏）
+  if (!state.reading) {
     toolbar.classList.add("hidden");
     return;
   }
@@ -214,13 +214,9 @@ function renderToolbar() {
   addIconBtn("openInEditor", "在编辑器中打开", "openInEditor");
   addSep();
   addChapterSelect();
-  addSep();
-  addIconBtn("showBookInfo", "当前阅读信息", "showBookInfo");
 }
 
 const ICONS = {
-  refresh:
-    '<svg viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path fill="currentColor" d="M771.776 794.88A384 384 0 0 1 128 512h64a320 320 0 0 0 555.712 216.448H654.72a32 32 0 1 1 0-64h149.056a32 32 0 0 1 32 32v148.928a32 32 0 1 1-64 0v-50.56zM276.288 295.616h92.992a32 32 0 0 1 0 64H220.16a32 32 0 0 1-32-32V178.56a32 32 0 0 1 64 0v50.56A384 384 0 0 1 896.128 512h-64a320 320 0 0 0-555.776-216.384z"/></svg>',
   back:
     '<svg viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path fill="currentColor" d="M365.44 112.32v133.76h237.888a340.928 340.928 0 0 1 340.928 335.36v5.632a340.928 340.928 0 0 1-335.296 340.864l-5.632 0.064h-324.48a16 16 0 0 1-16-16v-64a16 16 0 0 1 16-16h324.48a244.928 244.928 0 0 0 5.12-489.856H130.432a16 16 0 0 1-11.136-27.52l218.88-213.76a16 16 0 0 1 27.2 11.456z"/></svg>',
   previousChapter:
@@ -229,8 +225,6 @@ const ICONS = {
     '<svg viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path fill="currentColor" d="M368.576 116.672a16 16 0 0 0-22.656 0l-45.248 45.248a16 16 0 0 0 0 22.656l327.936 327.936-327.936 327.936a16 16 0 0 0 0 22.592l45.248 45.248a16 16 0 0 0 22.656 0l384.512-384.448a16 16 0 0 0 0-22.656L368.576 116.672z"/></svg>',
   openInEditor:
     '<svg viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path fill="currentColor" d="M160 128h448a32 32 0 0 1 32 32v128h192a32 32 0 0 1 32 32v544a32 32 0 0 1-32 32H416a32 32 0 0 1-32-32V768H160a32 32 0 0 1-32-32V160a32 32 0 0 1 32-32zm64 64v512h192V384a32 32 0 0 1 32-32h160V192H224zm224 224v448h384V448H448zm64 96h256v48H512v-48zm0 128h256v48H512v-48zm0 128h160v48H512v-48z"/></svg>',
-  showBookInfo:
-    '<svg viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path fill="currentColor" d="M158.1 149.9h518.3v230.3c0 13.8 11.2 25 25 25s25-11.2 25-25V148.9c0-27.1-21.9-49-49-49H157.1c-27.1 0-49 21.9-49 49v650.3c0 27.1 21.9 49 49 49H408c13.8 0 25-11.2 25-25s-11.2-25-25-25H158.1V149.9z"/><path fill="currentColor" d="M565.1 276.6c0-13.8-11.2-25-25-25H294.4c-13.8 0-25 11.2-25 25s11.2 25 25 25h245.7c13.8 0 25-11.2 25-25zM565.1 422.2c0-13.8-11.2-25-25-25H294.4c-13.8 0-25 11.2-25 25s11.2 25 25 25h245.7c13.8 0 25-11.2 25-25zM294.4 542.7c-13.8 0-25 11.2-25 25s11.2 25 25 25h100.2c13.8 0 25-11.2 25-25s-11.2-25-25-25H294.4zM856.6 544.3c-41.6-41.6-96.8-64.5-155.6-64.5s-114.1 22.9-155.6 64.5c-41.6 41.6-64.5 96.8-64.5 155.6s22.9 114.1 64.5 155.6C587 897.1 642.2 920 701 920s114.1-22.9 155.6-64.5C898.1 814 921 758.8 921 700s-22.9-114.1-64.4-155.7zM703.3 870.1c-95.7 1.3-173.8-76.8-172.5-172.5 1.2-90.2 77.5-166.5 167.7-167.7 95.7-1.3 173.8 76.8 172.5 172.5-1.2 90.1-77.5 166.4-167.7 167.7z"/></svg>',
 };
 
 function addIconBtn(iconKey, title, messageType) {
@@ -420,16 +414,17 @@ function renderContent() {
   const title = document.createElement("h2");
   title.textContent = state.chapterTitle || state.bookName;
   content.appendChild(title);
-  // 正文已在编辑器里打开：侧栏只留目录和按钮，不重复显示正文
-  if (state.panelOpen) {
+  // 正文显示在别处（编辑器面板或行内阅读）：侧栏只留提示和按钮，不重复显示正文
+  if (state.panelOpen || state.inlineOpen) {
     const p = document.createElement("p");
     p.className = "hint";
-    p.textContent = "正文已在编辑器中打开。";
+    p.textContent = state.panelOpen ? "正文已在编辑器中打开。" : "正文显示在行内阅读里。";
     const b = document.createElement("button");
     b.type = "button";
     b.className = "link-btn";
     b.textContent = "回到侧栏阅读";
-    b.addEventListener("click", () => vscode.postMessage({ type: "closePanel" }));
+    // 回到侧栏时跳到当前进度位置
+    b.addEventListener("click", () => vscode.postMessage({ type: "backToSidebar" }));
     content.appendChild(p);
     content.appendChild(b);
     return;

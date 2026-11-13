@@ -19,11 +19,6 @@ IDE 小说阅读插件，对接 [阅读 Web](https://github.com/kukume/legado-we
 2. 打开设置搜索 `Legado`，填入阅读 Web 的 **服务器地址**（如 `http://192.168.1.10:8080`）与 **API Key**。
 3. 活动栏打开 Legado 侧栏，刷新书架后即可阅读。
 
-行内阅读开启后，单击一行代码，正文会显示在这一行的末尾（编辑代码时自动隐藏）。上下翻段快捷键：
-
-- **上一段**：`Ctrl+Alt+[`（macOS：`Control+Option+[`）
-- **下一段**：`Ctrl+Alt+]`（macOS：`Control+Option+]`）
-
 
 ## IntelliJ 插件
 
