@@ -62,8 +62,8 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider, vscode.Di
         void this.maybePreloadFromScroll(progress);
       },
       (index) => void this.selectChapter(index),
-      // 面板打开时侧栏只留目录和按钮，关闭后恢复显示正文
-      () => this.postState()
+      // 面板打开时侧栏只留目录和按钮，关闭后恢复显示正文并跳到当前进度
+      (open) => this.postState(open ? {} : { scrollRatio: this.currentPos / 10000 })
     );
     this.stream = new ProgressStream(
       getApiConfig,
@@ -473,9 +473,10 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider, vscode.Di
         this.chapterPanel.close();
         break;
       case "backToSidebar":
-        // 回到侧栏阅读：关掉行内阅读和编辑器面板，并跳到当前进度
-        await this.inline.setEnabled(false);
+        // 回到侧栏阅读：先关面板和行内阅读，再统一发一次带进度的状态。
+        // 顺序不能反：面板还开着时侧栏不渲染正文，此时发进度会因为高度为 0 而落到顶部
         this.chapterPanel.close();
+        await this.inline.setEnabled(false);
         this.postState({ scrollRatio: this.currentPos / 10000 });
         break;
       default:

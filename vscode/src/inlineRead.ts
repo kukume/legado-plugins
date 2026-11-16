@@ -155,12 +155,15 @@ export class InlineReadController implements vscode.Disposable {
     }
     if (this.pendingJumpToLastChunk) {
       this.pendingJumpToLastChunk = false;
-      this.chunkIndex = maxChunkIndex(text, this.chunkSize());
+      this.chunkIndex = maxChunkIndex(text, this.chunkSize(), this.firstChunkSize());
       this.notifyPosition(text);
     } else if (pos > 0) {
       this.chunkIndex = this.chunkForPosition(text, pos);
     } else {
-      this.chunkIndex = Math.min(Math.max(this.chunkIndex, 0), maxChunkIndex(text, this.chunkSize()));
+      this.chunkIndex = Math.min(
+        Math.max(this.chunkIndex, 0),
+        maxChunkIndex(text, this.chunkSize(), this.firstChunkSize())
+      );
     }
     if (this.pendingShowAfterLoad) {
       this.pendingShowAfterLoad = false;
@@ -180,7 +183,7 @@ export class InlineReadController implements vscode.Disposable {
 
   /** 章内位置（0~10000，按字数比例）落在第几段 */
   private chunkForPosition(text: string, pos: number): number {
-    return chunkAtPosition(text, pos, this.chunkSize());
+    return chunkAtPosition(text, pos, this.chunkSize(), this.firstChunkSize());
   }
 
   /** 当前段的开头在本章中的位置（0~10000） */
@@ -188,7 +191,7 @@ export class InlineReadController implements vscode.Disposable {
     if (!text || !this.onUserPosition) {
       return;
     }
-    this.onUserPosition(positionOfChunk(text, this.chunkIndex, this.chunkSize()));
+    this.onUserPosition(positionOfChunk(text, this.chunkIndex, this.chunkSize(), this.firstChunkSize()));
   }
 
   async nextChunk(): Promise<void> {
@@ -289,6 +292,16 @@ export class InlineReadController implements vscode.Disposable {
     return clampChunkSize(getChunkSize());
   }
 
+  /** 第一页前面要放章节名：从第一页里扣掉章节名占的字数，整页仍是设置的字数 */
+  private firstChunkSize(): number {
+    const title = this.session.currentChapter()?.title;
+    if (!title) {
+      return this.chunkSize();
+    }
+    const head = `【${title}】`.length;
+    return Math.max(1, this.chunkSize() - head);
+  }
+
   private async step(forward: boolean): Promise<boolean> {
     if (this.pendingShowAfterLoad) {
       this.refresh("加载中…");
@@ -299,7 +312,7 @@ export class InlineReadController implements vscode.Disposable {
       this.refresh("暂无正文，请先在 Legado 打开一章");
       return false;
     }
-    const max = maxChunkIndex(text, this.chunkSize());
+    const max = maxChunkIndex(text, this.chunkSize(), this.firstChunkSize());
     if (forward) {
       if (this.chunkIndex < max) {
         this.chunkIndex++;
@@ -381,7 +394,7 @@ export class InlineReadController implements vscode.Disposable {
         label = "加载中…";
       } else {
         label = this.chunkLabel(text);
-        this.maybePreload(maxChunkIndex(text, this.chunkSize()));
+        this.maybePreload(maxChunkIndex(text, this.chunkSize(), this.firstChunkSize()));
       }
     }
     // 显示在当前行代码的末尾：不把光标后面的代码挤开，长行时也不会跑出屏幕
@@ -409,19 +422,23 @@ export class InlineReadController implements vscode.Disposable {
     ]);
   }
 
-  /** 当前段的文字：第一段前带章节名，最后一段后提示下一章，末尾是 第几段/共几段 */
+  /**
+   * 当前段的文字：只有正文，后面跟 第几段/共几段。
+   * 章节名不加在这里——它会让第一页比设置的字数长；章节名在侧栏和标签页上已经有了
+   */
   private chunkLabel(text: string): string {
     const size = this.chunkSize();
-    const chunk = chunkText(text, this.chunkIndex, size);
+    const firstSize = this.firstChunkSize();
+    const chunk = chunkText(text, this.chunkIndex, size, firstSize);
     if (!chunk.trim()) {
       return "（无内容）";
     }
-    const max = maxChunkIndex(text, size);
+    const max = maxChunkIndex(text, size, firstSize);
     const title = this.session.currentChapter()?.title;
     const head = this.chunkIndex === 0 && title ? `【${title}】` : "";
     const hasNext = this.session.index + 1 < this.session.chapters.length;
     const tail = this.chunkIndex >= max ? (hasNext ? " →下一章" : " （全书完）") : "";
-    return `${head}${chunk}${tail} ·${this.chunkIndex + 1}/${max + 1}`;
+    return `${head}${chunk} ·${this.chunkIndex + 1}/${max + 1}${tail}`;
   }
 
   private clear(): void {
@@ -440,7 +457,7 @@ export class InlineReadController implements vscode.Disposable {
     if (!text) {
       this.status.text = "$(book) 行内阅读";
     } else {
-      const max = maxChunkIndex(text, this.chunkSize());
+      const max = maxChunkIndex(text, this.chunkSize(), this.firstChunkSize());
       this.status.text = `$(book) 行内 ${this.chunkIndex + 1}/${max + 1}`;
     }
     this.status.tooltip = "行内阅读：Ctrl+Alt+I 开关，左键显示；上一段 / 下一段默认不绑定快捷键，可在键盘快捷方式里自行绑定";

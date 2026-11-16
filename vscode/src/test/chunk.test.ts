@@ -44,6 +44,15 @@ describe("chunk", () => {
     assert.equal(chunks[1].text.replace(/\s/g, "").length, 20);
   });
 
+  it("shrinks the first page by the chapter title width", () => {
+    // 第一页前面放 8 字的章节名，正文只放 72 字，整页显示仍是 80
+    const text = "甲".repeat(200);
+    const chunks = splitChunks(text, 80, 72);
+    assert.equal(chunks[0].text.length, 72);
+    assert.equal(chunks[1].text.length, 80);
+    assert.equal(chunks.length, 3);
+  });
+
   it("keeps every visible character exactly once", () => {
     const text = "甲".repeat(37) + "\n" + "乙".repeat(51) + "\n　" + "丙".repeat(9);
     const joined = splitChunks(text, 80).map((c) => c.text).join("").replace(/\s/g, "");
@@ -55,6 +64,10 @@ describe("chunk", () => {
     const n = maxChunkIndex(text, 80) + 1;
     for (let i = 0; i < n; i++) {
       assert.equal(chunkAtPosition(text, positionOfChunk(text, i, 80), 80), i);
+    }
+    // 第一页更短时，往返映射同样成立
+    for (let i = 0; i < n; i++) {
+      assert.equal(chunkAtPosition(text, positionOfChunk(text, i, 80, 72), 80, 72), i);
     }
     assert.equal(chunkAtPosition(text, 0, 80), 0);
     assert.equal(chunkAtPosition(text, 10000, 80), n - 1);

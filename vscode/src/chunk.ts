@@ -25,10 +25,12 @@ let cacheChunks: Chunk[] = [];
 /**
  * 正文分页：按设置的字数硬切，一页正好 size 个可见字，不按段落、也不按标点。
  * 换行和缩进这类空白不显示、也不计数，所以每页显示的字数就是设置的字数。
+ * firstSize：第一页的字数（前面要放章节名时，从这一页里扣掉章节名占的字数）。
  * 同一章反复调用时用缓存
  */
-export function splitChunks(text: string, size: number): Chunk[] {
-  const key = `${size}\u0000${text}`;
+export function splitChunks(text: string, size: number, firstSize = size): Chunk[] {
+  const first = Math.max(1, Math.min(firstSize, size));
+  const key = `${size}\u0000${first}\u0000${text}`;
   if (key === cacheKey) {
     return cacheChunks;
   }
@@ -36,6 +38,7 @@ export function splitChunks(text: string, size: number): Chunk[] {
   let start = -1;
   let count = 0;
   let end = 0;
+  let limit = first;
   for (let i = 0; i < text.length; i++) {
     if (/\s/.test(text[i])) {
       continue;
@@ -45,10 +48,11 @@ export function splitChunks(text: string, size: number): Chunk[] {
     }
     count++;
     end = i + 1;
-    if (count === size) {
+    if (count === limit) {
       out.push({ start, end, text: text.slice(start, end) });
       start = -1;
       count = 0;
+      limit = size;
     }
   }
   if (start >= 0) {
@@ -59,12 +63,12 @@ export function splitChunks(text: string, size: number): Chunk[] {
   return out;
 }
 
-export function maxChunkIndex(text: string, chunkSize: number): number {
-  return Math.max(0, splitChunks(text, chunkSize).length - 1);
+export function maxChunkIndex(text: string, chunkSize: number, firstSize = chunkSize): number {
+  return Math.max(0, splitChunks(text, chunkSize, firstSize).length - 1);
 }
 
-export function chunkText(text: string, chunkIndex: number, chunkSize: number): string {
-  const chunks = splitChunks(text, chunkSize);
+export function chunkText(text: string, chunkIndex: number, chunkSize: number, firstSize = chunkSize): string {
+  const chunks = splitChunks(text, chunkSize, firstSize);
   if (!chunks.length) {
     return "";
   }
@@ -72,16 +76,16 @@ export function chunkText(text: string, chunkIndex: number, chunkSize: number): 
 }
 
 /** 第 chunkIndex 页的开头在本章中的位置（0~10000，按字数比例，与网页版的章内位置大致对应） */
-export function positionOfChunk(text: string, chunkIndex: number, chunkSize: number): number {
-  const chunks = splitChunks(text, chunkSize);
+export function positionOfChunk(text: string, chunkIndex: number, chunkSize: number, firstSize = chunkSize): number {
+  const chunks = splitChunks(text, chunkSize, firstSize);
   const c = chunks[Math.min(Math.max(chunkIndex, 0), chunks.length - 1)];
   // 向上取整：按比例换算回去时不能落到本页开头之前（否则 chunkAtPosition 会退回上一页）
   return c && text.length ? Math.ceil((c.start / text.length) * 10000) : 0;
 }
 
 /** 章内位置 pos（0~10000）落在第几页 */
-export function chunkAtPosition(text: string, pos: number, chunkSize: number): number {
-  const chunks = splitChunks(text, chunkSize);
+export function chunkAtPosition(text: string, pos: number, chunkSize: number, firstSize = chunkSize): number {
+  const chunks = splitChunks(text, chunkSize, firstSize);
   if (!chunks.length) {
     return 0;
   }
