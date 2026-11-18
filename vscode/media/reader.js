@@ -319,7 +319,9 @@ function refillChapterMenu(menu) {
         vscode.postMessage({ type: "moreNext" });
       });
     } else {
-      item.textContent = `${opt.index + 1}. ${opt.title}`;
+      const label = `${opt.index + 1}. ${opt.title}`;
+      item.textContent = label;
+      item.title = label;
       item.classList.toggle("active", opt.index === state.index);
       item.addEventListener("click", () => {
         chapterMenuSticky = null;
@@ -393,10 +395,11 @@ function renderContent() {
     (state.bookshelf || []).forEach((book, i) => {
       const tr = document.createElement("tr");
       tr.innerHTML = `<td></td><td></td><td></td><td></td>`;
-      tr.children[0].textContent = book.name;
-      tr.children[1].textContent = book.current;
-      tr.children[2].textContent = book.source;
-      tr.children[3].textContent = book.author;
+      // 单行截断，悬停时用 title 显示完整内容
+      [book.name, book.current, book.source, book.author].forEach((text, col) => {
+        tr.children[col].textContent = text;
+        tr.children[col].title = text || "";
+      });
       tr.addEventListener("click", () => vscode.postMessage({ type: "openBook", index: i }));
       tbody.appendChild(tr);
     });

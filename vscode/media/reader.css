@@ -158,8 +158,10 @@ body {
   text-align: left;
   padding: 4px 8px;
   cursor: pointer;
-  white-space: normal;
-  overflow-wrap: anywhere;
+  /* 章节名太长时单行显示并截断，不挤到第二行 */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .chapter-item:hover {
@@ -229,8 +231,31 @@ td {
   text-align: left;
   padding: 6px 4px;
   border-bottom: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.25));
-  word-break: break-all;
-  overflow-wrap: anywhere;
+  /* 书名、进度、书源、作者都只占一行，太长就截断 */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 书名占大头，其余三列均分剩下的空间 */
+th:nth-child(1),
+td:nth-child(1) {
+  width: 40%;
+}
+
+th:nth-child(2),
+td:nth-child(2) {
+  width: 28%;
+}
+
+th:nth-child(3),
+td:nth-child(3) {
+  width: 18%;
+}
+
+th:nth-child(4),
+td:nth-child(4) {
+  width: 14%;
 }
 
 tbody tr {
@@ -245,7 +270,10 @@ h2 {
   margin: 0 0 8px;
   font-size: 14px;
   font-weight: 600;
-  overflow-wrap: anywhere;
+  /* 章节名太长时截断，不占两行 */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .chapter-head {

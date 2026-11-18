@@ -10,6 +10,7 @@ import {
   PRELOAD_REMAINING_CHUNKS,
 } from "./chunk";
 import { getChunkSize, getInlineReadFontSize, getInlineReadOptions } from "./config";
+import { CommentStyle, getCommentStyle, invalidateCommentColor } from "./themeColor";
 import { ReadSession } from "./session";
 
 export class InlineReadController implements vscode.Disposable {
@@ -35,7 +36,18 @@ export class InlineReadController implements vscode.Disposable {
     this.shownDocumentInternal = value;
     if (changed) {
       this.onDidChangeShowing?.();
+      this.syncActiveContext();
     }
+  }
+
+  /**
+   * 编辑器标题栏的翻段按钮用这个上下文键决定是否显示：
+   * 只要编辑器里正显示行内正文就一直显示，不受焦点在侧栏还是编辑器影响。
+   * 进入或离开正文时由宿主调用，因为 session.reading 变了但 shownDocument 可能还没变
+   */
+  syncActiveContext(): void {
+    const active = this.enabledInternal && this.session.reading && !!this.shownDocumentInternal;
+    void vscode.commands.executeCommand("setContext", "legado.inlineActive", active);
   }
 
   /** 刚用快捷键打开时，忽略同一次点击带来的编辑器焦点抖动。 */
@@ -45,6 +57,8 @@ export class InlineReadController implements vscode.Disposable {
   onUserPosition: ((pos: number) => void) | undefined;
   /** 开关或显示状态变了：侧栏据此决定是否显示正文 */
   onDidChangeShowing: (() => void) | undefined;
+  /** 当前主题里注释的样式（伪装成注释时用），读不到就用主题的 CodeLens 颜色 */
+  private commentStyle: CommentStyle = {};
 
   constructor(
     private readonly context: vscode.ExtensionContext,
@@ -84,9 +98,29 @@ export class InlineReadController implements vscode.Disposable {
         ) {
           this.refresh();
         }
+        if (e.affectsConfiguration("workbench.colorTheme")) {
+          void this.loadCommentColor();
+        }
       })
     );
     this.updateStatus();
+    void this.loadCommentColor();
+  }
+
+  /** 读当前主题里注释的样式：伪装成注释时用它，和真正的注释一致 */
+  private async loadCommentColor(): Promise<void> {
+    invalidateCommentColor();
+    const style = await getCommentStyle();
+    if (
+      style.color === this.commentStyle.color &&
+      style.italic === this.commentStyle.italic &&
+      style.bold === this.commentStyle.bold
+    ) {
+      return;
+    }
+    this.commentStyle = style;
+    // 样式变了要重画一次，否则要等下一次翻段才生效
+    this.refresh();
   }
 
   dispose(): void {
@@ -103,9 +137,13 @@ export class InlineReadController implements vscode.Disposable {
     return this.enabledInternal;
   }
 
-  /** 正文正显示在某个编辑器里（没打开正文时一律不算） */
+  /**
+   * 正文显示在编辑器里：开着行内阅读、正在读正文，并且这个文档里已经显示（或即将显示）。
+   * 在侧栏开启行内阅读时还没有活动编辑器，此时也算“要显示”——
+   * 否则侧栏会同时显示整章正文，和行内阅读重复。
+   */
   get isShowing(): boolean {
-    return this.enabledInternal && this.session.reading && !!this.shownDocument;
+    return this.enabledInternal && this.session.reading;
   }
 
   async setEnabled(value: boolean): Promise<void> {
@@ -130,6 +168,7 @@ export class InlineReadController implements vscode.Disposable {
     this.onDidChangeShowing?.();
     await this.context.globalState.update("legado.inlineRead.enabled", value);
     await vscode.commands.executeCommand("setContext", "legado.inlineRead", value);
+    this.syncActiveContext();
   }
 
   async toggle(): Promise<boolean> {
@@ -409,11 +448,12 @@ export class InlineReadController implements vscode.Disposable {
         renderOptions: {
           after: {
             contentText: `${comment ? commentPrefix(editor.document.languageId) : ""}${label.replace(/\s+/g, " ")}`,
-            color: options.color || new vscode.ThemeColor("editorCodeLens.foreground"),
+            color: options.color || (comment && this.commentStyle.color) || new vscode.ThemeColor("editorCodeLens.foreground"),
             // 行尾有代码时空出两格，像行尾注释
             margin: line.isEmptyOrWhitespace ? "0" : "0 0 0 2ch",
-            fontStyle: comment ? "italic" : "normal",
-            fontWeight: "normal",
+            // 跟随主题的注释样式：VS Code 默认主题的注释不是斜体，只有主题里勾了斜体才用斜体
+            fontStyle: comment && this.commentStyle.italic === true ? "italic" : "normal",
+            fontWeight: comment && this.commentStyle.bold === true ? "bold" : "normal",
             // VS Code 装饰器没有字号字段，用 textDecoration 注入，避免再套一层背景框
             textDecoration: inlineTextStyle(fontSize),
           },
@@ -493,6 +533,7 @@ function commentPrefix(languageId: string): string {
   }
   return "// ";
 }
+
 
 /** 装饰器没有字号接口，借 textDecoration 把样式写进同一条 CSS。 */
 function inlineTextStyle(fontSize: number): string {

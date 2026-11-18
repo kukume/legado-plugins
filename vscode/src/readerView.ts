@@ -577,6 +577,8 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider, vscode.Di
     if (typeof extra.scrollTo === "number") {
       this.contentScrollTop = 0;
     }
+    // 翻段按钮跟着 session.reading 变：进入/离开正文时刷新上下文键
+    this.inline.syncActiveContext();
     const font = getBodyFont();
     const chapter = this.session.currentChapter();
     this.chapterPanel.sync({
